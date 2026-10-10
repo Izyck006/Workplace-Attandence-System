@@ -1,0 +1,32 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environments & Secrets
+.env
+.venv
+env/
+venv/
+ENV/
+
+# Local databases & backups
+backup/
+*.db
+*.sqlite3
+
+# PyInstaller (Build files)
+build/
+*.spec
+
+# Specifically Ignore Randaframes builds, but ALLOW Workplace builds
+dist/RandaframesAttendance/
+RandaframesAttendance.exe
+*Randaframes*
+
+!dist/WorkplaceAttendance/
+!WorkplaceAttendance.exe
+
+# OS generated files
+.DS_Store
+Thumbs.db
