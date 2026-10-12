@@ -1,6 +1,8 @@
+import os
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QLineEdit, QPushButton, QMessageBox
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFont, QPixmap
+from src.utils import get_asset_path
 from src.services.auth import AuthService
 
 class LoginWidget(QWidget):
@@ -16,8 +18,19 @@ class LoginWidget(QWidget):
         layout = QVBoxLayout(self)
         layout.setAlignment(Qt.AlignCenter)
 
+        logo_path = get_asset_path("randaframes logo.jpg")
+        if not os.path.exists(logo_path):
+            logo_path = get_asset_path("icon.ico")
+        if os.path.exists(logo_path):
+            logo_label = QLabel()
+            pixmap = QPixmap(logo_path).scaled(80, 80, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            logo_label.setPixmap(pixmap)
+            logo_label.setAlignment(Qt.AlignCenter)
+            logo_label.setStyleSheet("margin-bottom: 12px;")
+            layout.addWidget(logo_label, alignment=Qt.AlignCenter)
+
         title = QLabel("Admin Console Login")
-        title.setFont(QFont("Arial", 24, QFont.Bold))
+        title.setFont(QFont("Arial", 22, QFont.Bold))
         title.setAlignment(Qt.AlignCenter)
 
         self.username_input = QLineEdit()

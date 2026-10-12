@@ -121,7 +121,6 @@ class KojackScanner:
         return status == IBSU_STATUS_OK or status == -303
 
     def block_get_image(self, ignore_preview=True):
-        """Blocks until an image is captured."""
         if not self._dll or self._handle is None:
             return False, None, 0, 0, False, -1
             
@@ -145,7 +144,7 @@ class KojackScanner:
         )
         
         if status != IBSU_STATUS_OK:
-            if status not in (-8, 300):
+            if status not in (-8, 300, -205):
                 print(f"BGetImage returned status: {status}")
             return False, None, 0, 0, False, -1
             

@@ -1,5 +1,9 @@
 import sys
+import os
+import ctypes
 from PySide6.QtWidgets import QApplication, QMainWindow, QLabel, QVBoxLayout, QWidget
+from PySide6.QtGui import QIcon
+from src.utils import get_asset_path, apply_window_icon
 from src.data.database import DatabaseManager
 from src.data.migrations import MigrationManager
 from src.data import initial_schema
@@ -26,8 +30,9 @@ from PySide6.QtWidgets import QStackedWidget
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Workplace Attendance System")
+        self.setWindowTitle("Randaframes Attendance")
         self.resize(1000, 700)
+        apply_window_icon(self)
         
         self.stacked_widget = QStackedWidget()
         self.setCentralWidget(self.stacked_widget)
@@ -82,9 +87,19 @@ def main():
         print(f"Failed to run migrations: {e}")
         
 
+    try:
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("randaframes.attendance.system.v1")
+    except Exception:
+        pass
+
     app = QApplication(sys.argv)
+    icon_path = get_asset_path("icon.ico")
+    if os.path.exists(icon_path):
+        app.setWindowIcon(QIcon(icon_path))
+
     window = MainWindow()
     window.show()
+    apply_window_icon(window)
     
     
     exit_code = app.exec()

@@ -1,10 +1,12 @@
+import os
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
     QTableWidget, QTableWidgetItem, QHeaderView, QPushButton,
     QFrame, QTabWidget, QComboBox, QDateEdit, QLineEdit
 )
 from PySide6.QtCore import Qt, QDate, Signal
-from PySide6.QtGui import QFont, QColor
+from PySide6.QtGui import QFont, QColor, QPixmap
+from src.utils import get_asset_path
 from src.data.repositories import EmployeeRepository
 from src.data.database import DatabaseManager
 
@@ -22,7 +24,17 @@ class DashboardWidget(QWidget):
         
         
         header_layout = QHBoxLayout()
-        title_label = QLabel("Admin Console")
+        logo_path = get_asset_path("randaframes logo.jpg")
+        if not os.path.exists(logo_path):
+            logo_path = get_asset_path("icon.ico")
+        if os.path.exists(logo_path):
+            logo_label = QLabel()
+            pixmap = QPixmap(logo_path).scaled(36, 36, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            logo_label.setPixmap(pixmap)
+            logo_label.setStyleSheet("margin-right: 8px;")
+            header_layout.addWidget(logo_label)
+
+        title_label = QLabel("Randaframes Admin Console")
         title_label.setFont(QFont("Arial", 18, QFont.Bold))
         
         logout_btn = QPushButton("Log Out")
@@ -411,7 +423,7 @@ class DashboardWidget(QWidget):
             
     def create_kpi_card(self, title, value, color_hex):
         frame = QFrame()
-        frame.setStyleSheet(f"QFrame {  background-color: {color_hex}; border-radius: 8px; border: 1px solid #ccc; } ")
+        frame.setStyleSheet(f"QFrame {{ background-color: {color_hex}; border-radius: 8px; border: 1px solid #ccc; }}")
         layout = QVBoxLayout(frame)
         
         t_label = QLabel(title)

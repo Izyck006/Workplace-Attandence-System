@@ -1,6 +1,8 @@
+import os
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QGroupBox, QFormLayout, QLineEdit, QRadioButton, QButtonGroup
 from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QFont, QPixmap
+from src.utils import get_asset_path
 from src.scanner.worker import ScannerWorker
 
 class KioskWidget(QWidget):
@@ -17,7 +19,17 @@ class KioskWidget(QWidget):
         
         
         top_layout = QHBoxLayout()
-        title = QLabel("Workplace Attendance Terminal")
+        logo_path = get_asset_path("randaframes logo.jpg")
+        if not os.path.exists(logo_path):
+            logo_path = get_asset_path("icon.ico")
+        if os.path.exists(logo_path):
+            logo_label = QLabel()
+            pixmap = QPixmap(logo_path).scaled(48, 48, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            logo_label.setPixmap(pixmap)
+            logo_label.setStyleSheet("margin-right: 8px;")
+            top_layout.addWidget(logo_label)
+
+        title = QLabel("Randaframes Attendance Terminal")
         title.setFont(QFont("Arial", 20, QFont.Bold))
         
         admin_btn = QPushButton("Admin / Manager Login")
@@ -136,9 +148,6 @@ class KioskWidget(QWidget):
         self.photo_label.setFixedSize(150, 150)
         self.photo_label.setStyleSheet("border: 1px solid #ccc; background-color: #eee;")
         self.photo_label.setAlignment(Qt.AlignCenter)
-        
-        import os
-        
         self.photo_label.setText("No Photo")
         
         photo_layout.addWidget(photo_title)
