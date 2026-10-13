@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Randaframes Attendance</string>
+    <string name="scanner_idle">Ready for Fingerprint</string>
+    <string name="scanner_instruction">Place your thumb firmly on the sensor</string>
+    <string name="scanner_capturing">Scanning fingerprint...</string>
+    <string name="scanner_verifying">Matching identity...</string>
+    <string name="scanner_success">Verified Successfully</string>
+    <string name="scanner_not_found">Fingerprint Not Recognized</string>
+    <string name="total_present">Present Today</string>
+    <string name="on_time">On Time</string>
+    <string name="enrolled_staff">Total Staff</string>
+    <string name="recent_activity">Live Check-in Stream</string>
+    <string name="btn_enroll">Enroll Staff</string>
+    <string name="btn_refresh">Refresh Scanner</string>
+</resources>

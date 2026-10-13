@@ -271,6 +271,7 @@ class KioskWidget(QWidget):
             
             best_match = None
             best_score = 0
+            second_best_score = 0
             
             for emp in db.employees.find({"has_fingerprint": True}):
                 if "fingerprint_descriptors" in emp:
@@ -293,10 +294,18 @@ class KioskWidget(QWidget):
                         emp_best_score = matcher.get_match_score(probe_descriptors, db_desc_data)
                     
                     if emp_best_score > best_score:
+                        second_best_score = best_score
                         best_score = emp_best_score
                         best_match = emp
+                    elif emp_best_score > second_best_score:
+                        second_best_score = emp_best_score
                         
-            if best_match and best_score >= 5: 
+            is_valid_match = False
+            if best_match and best_score >= 14:
+                if second_best_score == 0 or (best_score - second_best_score) >= 4 or best_score >= 25:
+                    is_valid_match = True
+
+            if is_valid_match: 
                 self.stop_scanner()
                 
                 import datetime
