@@ -56,6 +56,7 @@ class DashboardWidget(QWidget):
         self.tabs.addTab(self.tab_overview, "Overview")
         self.tabs.addTab(self.tab_attendance, "Reports")
         self.tabs.addTab(self.tab_employees, "Manage Employees")
+        self.tabs.currentChanged.connect(self.on_tab_changed)
         
         self.setup_overview_tab()
         self.setup_attendance_tab()
@@ -63,24 +64,32 @@ class DashboardWidget(QWidget):
         
         main_layout.addWidget(self.tabs)
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.refresh_overview_kpis()
+
+    def on_tab_changed(self, index):
+        if index == 0:
+            self.refresh_overview_kpis()
+        elif index == 1:
+            self.load_attendance()
+        elif index == 2:
+            self.load_employees()
+
     def setup_overview_tab(self):
         layout = QVBoxLayout(self.tab_overview)
         layout.setSpacing(20)
         
-        
         kpi_layout = QHBoxLayout()
-        emp_repo = EmployeeRepository()
-        try:
-            total_employees = len(emp_repo.get_all())
-        except Exception:
-            total_employees = 0
-
-        kpi_layout.addWidget(self.create_kpi_card("Total Employees", str(total_employees), "#e3f2fd"))
-        kpi_layout.addWidget(self.create_kpi_card("Present Today", "0", "#e8f5e9"))
-        kpi_layout.addWidget(self.create_kpi_card("Absent / Leave", "0", "#ffebee"))
+        card_total, self.total_emp_label = self.create_kpi_card("Total Employees", "0", "#e3f2fd")
+        card_present, self.present_today_label = self.create_kpi_card("Present Today", "0", "#e8f5e9")
+        card_absent, self.absent_today_label = self.create_kpi_card("Absent / Leave", "0", "#ffebee")
+        
+        kpi_layout.addWidget(card_total)
+        kpi_layout.addWidget(card_present)
+        kpi_layout.addWidget(card_absent)
         
         layout.addLayout(kpi_layout)
-        
         
         backup_layout = QHBoxLayout()
         backup_btn = QPushButton("Run Daily Backup to SQLite")
@@ -92,6 +101,26 @@ class DashboardWidget(QWidget):
         
         layout.addLayout(backup_layout)
         layout.addStretch()
+
+        self.refresh_overview_kpis()
+
+    def refresh_overview_kpis(self):
+        try:
+            import datetime
+            db = DatabaseManager.get_db()
+            total_employees = db.employees.count_documents({})
+            today_str = datetime.datetime.now().strftime("%Y-%m-%d")
+            present_emp_ids = db.attendance_records.distinct("employee_id", {"work_date": today_str, "status": "present"})
+            present_today = len(present_emp_ids)
+            absent_today = max(0, total_employees - present_today)
+            if hasattr(self, 'total_emp_label'):
+                self.total_emp_label.setText(str(total_employees))
+            if hasattr(self, 'present_today_label'):
+                self.present_today_label.setText(str(present_today))
+            if hasattr(self, 'absent_today_label'):
+                self.absent_today_label.setText(str(absent_today))
+        except Exception:
+            pass
 
     def run_backup(self):
         from src.services.backup import BackupService
@@ -333,6 +362,7 @@ class DashboardWidget(QWidget):
                 self.emp_table.setItem(row_idx, 3, QTableWidgetItem(emp.get("job_title", "")))
         except Exception as e:
             print(f"Error loading employees: {e}")
+        self.refresh_overview_kpis()
 
     def open_add_employee(self):
         from src.ui.add_employee import AddEmployeeDialog
@@ -438,4 +468,4 @@ class DashboardWidget(QWidget):
         
         layout.addWidget(t_label)
         layout.addWidget(v_label)
-        return frame
+        return frame, v_label

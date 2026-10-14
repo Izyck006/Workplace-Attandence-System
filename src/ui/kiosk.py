@@ -301,9 +301,11 @@ class KioskWidget(QWidget):
                         second_best_score = emp_best_score
                         
             is_valid_match = False
-            if best_match and best_score >= 14:
-                if second_best_score == 0 or (best_score - second_best_score) >= 4 or best_score >= 25:
+            if best_match and best_score >= 25:
+                if second_best_score == 0 or (best_score - second_best_score) >= 6 or best_score >= 50:
                     is_valid_match = True
+
+            print(f"Biometric scan result: Candidate={best_match.get('first_name') if best_match else 'None'} Score={best_score}, 2nd={second_best_score}, Valid={is_valid_match}")
 
             if is_valid_match: 
                 self.stop_scanner()
