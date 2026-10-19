@@ -2,10 +2,53 @@ from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, 
     QPushButton, QMessageBox, QFileDialog, QComboBox
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal, QThread
 from PySide6.QtGui import QPixmap
 import datetime
 from src.data.repositories import EmployeeRepository
+
+
+class EmployeeSaveWorker(QThread):
+    save_success = Signal(str, bool)
+    save_failed = Signal(str)
+
+    def __init__(self, data, existing_id, department_name):
+        super().__init__()
+        self.data = data
+        self.existing_id = existing_id
+        self.department_name = department_name
+
+    def run(self):
+        try:
+            from src.client import ClientDatabase as DatabaseManager
+            from src.data.repositories import EmployeeRepository
+            db = DatabaseManager.get_db()
+            emp_repo = EmployeeRepository()
+
+            dept_doc = db.departments.find_one({"name": self.department_name})
+            if not dept_doc:
+                res = db.departments.insert_one({
+                    "name": self.department_name,
+                    "is_active": True,
+                    "created_at": datetime.datetime.now()
+                })
+                dept_id = res.inserted_id
+            else:
+                dept_id = dept_doc["_id"]
+
+            self.data["department_id"] = dept_id
+
+            if self.existing_id:
+                emp_repo.collection.update_one({"_id": self.existing_id}, {"$set": self.data})
+                self.save_success.emit(str(self.existing_id), True)
+            else:
+                self.data["created_at"] = datetime.datetime.now()
+                self.data["has_fingerprint"] = False
+                res = emp_repo.collection.insert_one(self.data)
+                self.save_success.emit(str(res.inserted_id), False)
+        except Exception as exc:
+            self.save_failed.emit(str(exc))
+
 
 class AddEmployeeDialog(QDialog):
     def __init__(self, parent=None, employee_doc=None):
@@ -15,6 +58,7 @@ class AddEmployeeDialog(QDialog):
         self.setMinimumSize(500, 650)
         self.emp_repo = EmployeeRepository()
         self.photo_bytes = None
+        self.save_worker = None
         self.setup_ui()
         if self.employee_doc:
             self.load_data()
@@ -133,47 +177,41 @@ class AddEmployeeDialog(QDialog):
             import random
             import string
             emp_id = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
-            
-        try:
-            from src.client import ClientDatabase as DatabaseManager
-            db = DatabaseManager.get_db()
-            
-            
-            dept_doc = db.departments.find_one({"name": department})
-            if not dept_doc:
-                res = db.departments.insert_one({
-                    "name": department, 
-                    "is_active": True, 
-                    "created_at": datetime.datetime.now()
-                })
-                dept_id = res.inserted_id
-            else:
-                dept_id = dept_doc["_id"]
-                
-            data = {
-                "office_id": self.office_input.currentData(),
-                "first_name": first_name,
-                "last_name": last_name,
-                "full_name": f"{first_name} {last_name}",
-                "employee_id": emp_id,
-                "employee_no": emp_id,
-                "job_title": job_title,
-                "department_id": dept_id,
-                "status": self.employee_doc.get("status", "active") if self.employee_doc else "active",
-                "photo_bytes": self.photo_bytes,
-                "updated_at": datetime.datetime.now()
-            }
 
-            if self.employee_doc:
-                self.emp_repo.collection.update_one({"_id": self.employee_doc["_id"]}, {"$set": data})
-                self.new_employee_id = str(self.employee_doc["_id"])
-                QMessageBox.information(self, "Success", "Employee updated successfully.")
-            else:
-                data["created_at"] = datetime.datetime.now()
-                data["has_fingerprint"] = False
-                res = self.emp_repo.collection.insert_one(data)
-                self.new_employee_id = str(res.inserted_id)
-                QMessageBox.information(self, "Success", "Employee added successfully.")
-            self.accept()
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to save: {str(e)}")
+        data = {
+            "office_id": self.office_input.currentData(),
+            "first_name": first_name,
+            "last_name": last_name,
+            "full_name": f"{first_name} {last_name}",
+            "employee_id": emp_id,
+            "employee_no": emp_id,
+            "job_title": job_title,
+            "status": self.employee_doc.get("status", "active") if self.employee_doc else "active",
+            "photo_bytes": self.photo_bytes,
+            "updated_at": datetime.datetime.now()
+        }
+
+        self.save_btn.setEnabled(False)
+        self.save_btn.setText("Saving Employee...")
+        self.cancel_btn.setEnabled(False)
+
+        existing_id = self.employee_doc["_id"] if self.employee_doc else None
+        self.save_worker = EmployeeSaveWorker(data, existing_id, department)
+        self.save_worker.save_success.connect(self.on_save_success)
+        self.save_worker.save_failed.connect(self.on_save_failed)
+        self.save_worker.start()
+
+    def on_save_success(self, new_id, is_edit):
+        self.save_btn.setEnabled(True)
+        self.save_btn.setText("Save Employee")
+        self.cancel_btn.setEnabled(True)
+        self.new_employee_id = new_id
+        msg = "Employee updated successfully." if is_edit else "Employee added successfully."
+        QMessageBox.information(self, "Success", msg)
+        self.accept()
+
+    def on_save_failed(self, err_msg):
+        self.save_btn.setEnabled(True)
+        self.save_btn.setText("Save Employee")
+        self.cancel_btn.setEnabled(True)
+        QMessageBox.critical(self, "Error", f"Failed to save: {err_msg}")

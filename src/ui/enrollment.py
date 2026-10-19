@@ -1,7 +1,37 @@
 from PySide6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QMessageBox
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, Signal, QThread
 from src.scanner.worker import ScannerWorker
 from src.services.fingerprint import FingerprintMatcher
+
+
+class EnrollmentWorker(QThread):
+    enroll_success = Signal()
+    enroll_failed = Signal(str)
+
+    def __init__(self, employee_id, captured_templates):
+        super().__init__()
+        self.employee_id = employee_id
+        self.captured_templates = captured_templates
+
+    def run(self):
+        try:
+            matcher = FingerprintMatcher()
+            all_descriptors = []
+            for template in self.captured_templates:
+                descriptors = matcher.extract_descriptors(template["image"], template["width"], template["height"])
+                if descriptors is not None:
+                    all_descriptors.append(descriptors)
+
+            if not all_descriptors:
+                self.enroll_failed.emit("Failed to extract fingerprint features. Please try scanning again.")
+                return
+
+            from src.client import api
+            api.call(f'/employees/{self.employee_id}/fingerprint',
+                     {'samples': [d.tolist() for d in all_descriptors]})
+            self.enroll_success.emit()
+        except Exception as exc:
+            self.enroll_failed.emit(str(exc))
 
 
 class EnrollFingerprintDialog(QDialog):
@@ -10,6 +40,7 @@ class EnrollFingerprintDialog(QDialog):
         self.employee_id = employee_id
         self.scanner_provider = scanner_provider
         self.worker = None
+        self.enroll_worker = None
         self.step = 0
         
         scanner = getattr(self.scanner_provider, 'scanner', None)
@@ -149,31 +180,21 @@ class EnrollFingerprintDialog(QDialog):
             self.countdown_callback()
         
     def save_templates(self):
-        from src.client import ClientDatabase as DatabaseManager
-        from bson import ObjectId
-        import datetime
-        
-        db = DatabaseManager.get_db()
-        
-        matcher = FingerprintMatcher()
-        all_descriptors = []
-        
-        for template in self.captured_templates:
-            descriptors = matcher.extract_descriptors(template["image"], template["width"], template["height"])
-            if descriptors is not None:
-                all_descriptors.append(descriptors)
-        
-        if not all_descriptors:
-            QMessageBox.critical(self, "Error", "Failed to extract fingerprint features. Try again.")
-            self.reject()
-            return
-            
-        from src.client import api
-        try:
-            api.call(f'/employees/{self.employee_id}/fingerprint',
-                     {'samples': [descriptors.tolist() for descriptors in all_descriptors]})
-        except ValueError as exc:
-            QMessageBox.critical(self, 'Enrollment not saved', str(exc))
-            return
+        self.status_label.setStyleSheet("font-size: 16px; color: #4285F4; font-weight: bold;")
+        self.status_label.setText("Saving fingerprints to central server...")
+        self.cancel_btn.setEnabled(False)
+
+        self.enroll_worker = EnrollmentWorker(self.employee_id, self.captured_templates)
+        self.enroll_worker.enroll_success.connect(self.on_enroll_success)
+        self.enroll_worker.enroll_failed.connect(self.on_enroll_failed)
+        self.enroll_worker.start()
+
+    def on_enroll_success(self):
+        self.cancel_btn.setEnabled(True)
         QMessageBox.information(self, 'Success', 'Fingerprints enrolled for this office.')
         self.accept()
+
+    def on_enroll_failed(self, error_msg):
+        self.cancel_btn.setEnabled(True)
+        QMessageBox.critical(self, 'Enrollment Failed', error_msg)
+        self.reject()

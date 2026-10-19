@@ -1,9 +1,10 @@
-﻿import csv
+import csv
 from datetime import datetime, timedelta, timezone
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QTabWidget, QComboBox, QDateEdit, QLineEdit, QTableWidget, QTableWidgetItem,
-    QHeaderView, QMessageBox, QFileDialog, QInputDialog)
-from PySide6.QtCore import Qt, QDate, Signal
+                             QTabWidget, QComboBox, QDateEdit, QLineEdit, QTableWidget,
+                             QTableWidgetItem, QHeaderView, QMessageBox, QFileDialog, QInputDialog)
+from PySide6.QtCore import Qt, QDate, Signal, QThread
+from PySide6.QtGui import QGuiApplication
 from bson import ObjectId
 from src.client import api, ClientDatabase
 from src.offices import OFFICES, OFFICE_MAP
@@ -22,6 +23,79 @@ def csv_safe(value):
     return "'" + text if text.lstrip().startswith(('=', '+', '-', '@', '\t', '\r', '\n')) else text
 
 
+class DashboardLoader(QThread):
+    data_loaded = Signal(list, list, int)
+    load_failed = Signal(str)
+
+    def __init__(self, emp_query, att_query):
+        super().__init__()
+        self.emp_query = emp_query
+        self.att_query = att_query
+
+    def run(self):
+        try:
+            db = ClientDatabase.get_db()
+            employees = list(db.employees.find(self.emp_query))
+            records = list(db.attendance_records.find(self.att_query))
+            today = datetime.now(LAGOS).strftime('%Y-%m-%d')
+            present_count = len({r['employee_id'] for r in records if r.get('work_date') == today and r.get('clock_in_at')})
+            self.data_loaded.emit(employees, records, present_count)
+        except Exception as exc:
+            self.load_failed.emit(str(exc))
+
+
+class PasswordResetWorker(QThread):
+    reset_success = Signal(dict, str)
+    reset_failed = Signal(str)
+
+    def __init__(self, office_id, office_name):
+        super().__init__()
+        self.office_id = office_id
+        self.office_name = office_name
+
+    def run(self):
+        try:
+            result = api.call(f'/offices/{self.office_id}/reset-password')
+            self.reset_success.emit(result, self.office_name)
+        except Exception as exc:
+            self.reset_failed.emit(str(exc))
+
+
+class PasswordChangeWorker(QThread):
+    change_success = Signal()
+    change_failed = Signal(str)
+
+    def __init__(self, password):
+        super().__init__()
+        self.password = password
+
+    def run(self):
+        try:
+            api.call('/password', {'password': self.password})
+            self.change_success.emit()
+        except Exception as exc:
+            self.change_failed.emit(str(exc))
+
+
+class DeactivateWorker(QThread):
+    deactivate_success = Signal()
+    deactivate_failed = Signal(str)
+
+    def __init__(self, employee_id):
+        super().__init__()
+        self.employee_id = employee_id
+
+    def run(self):
+        try:
+            ClientDatabase.get_db().employees.update_one(
+                {'_id': self.employee_id},
+                {'$set': {'status': 'inactive'}}
+            )
+            self.deactivate_success.emit()
+        except Exception as exc:
+            self.deactivate_failed.emit(str(exc))
+
+
 class DashboardWidget(QWidget):
     logout_requested = Signal()
     kiosk_requested = Signal()
@@ -31,80 +105,112 @@ class DashboardWidget(QWidget):
         self.scanner_provider = scanner_provider
         self.user = None
         self.employees = {}
+        self.loader = None
         layout = QVBoxLayout(self)
+
         header = QHBoxLayout()
         self.title = QLabel('Randaframes Attendance')
         self.title.setStyleSheet('font-size: 22px; font-weight: bold;')
         header.addWidget(self.title)
         header.addStretch()
+
         self.kiosk_button = QPushButton('Open attendance terminal')
         self.kiosk_button.clicked.connect(self.kiosk_requested.emit)
         header.addWidget(self.kiosk_button)
+
         password_button = QPushButton('Change password')
         password_button.clicked.connect(self.change_password)
         header.addWidget(password_button)
+
         logout = QPushButton('Log out')
         logout.clicked.connect(self.logout_requested.emit)
         header.addWidget(logout)
         layout.addLayout(header)
+
         self.summary = QLabel('')
+        self.summary.setStyleSheet('font-size: 14px; font-weight: bold; color: #4CAF50; padding: 6px 0;')
         layout.addWidget(self.summary)
+
         filters = QHBoxLayout()
         self.location_filter = QComboBox()
-        self.location_filter.addItem('All locations', None)
-        for location in sorted({o['location'] for o in OFFICES}):
-            self.location_filter.addItem(location, location)
-        self.office_filter = QComboBox()
-        self.office_filter.addItem('All offices', None)
-        for office in OFFICES:
-            self.office_filter.addItem(office['name'], office['_id'])
+        self.location_filter.addItem('All locations', '')
+        for loc in sorted({o['location'] for o in OFFICES}):
+            self.location_filter.addItem(loc, loc)
         filters.addWidget(QLabel('Location:'))
         filters.addWidget(self.location_filter)
+
+        self.office_filter = QComboBox()
+        self.office_filter.addItem('All offices', '')
+        for o in OFFICES:
+            self.office_filter.addItem(o['name'], o['_id'])
         filters.addWidget(QLabel('Office:'))
         filters.addWidget(self.office_filter)
-        self.refresh_button = QPushButton('Refresh')
-        self.refresh_button.clicked.connect(self.refresh)
-        filters.addWidget(self.refresh_button)
+
+        today = QDate.currentDate()
+        self.from_date = QDateEdit(today.addDays(-7))
+        self.from_date.setCalendarPopup(True)
+        self.to_date = QDateEdit(today)
+        self.to_date.setCalendarPopup(True)
+        filters.addWidget(QLabel('From:'))
+        filters.addWidget(self.from_date)
+        filters.addWidget(QLabel('To:'))
+        filters.addWidget(self.to_date)
+
+        self.search = QLineEdit()
+        self.search.setPlaceholderText('Search staff name or ID')
+        self.search.textChanged.connect(self.apply_search_filter)
+        filters.addWidget(self.search)
+
+        refresh = QPushButton('Refresh')
+        refresh.clicked.connect(self.refresh)
+        filters.addWidget(refresh)
+
+        export = QPushButton('Export CSV')
+        export.clicked.connect(self.export_reports)
+        filters.addWidget(export)
         layout.addLayout(filters)
+
         self.tabs = QTabWidget()
         layout.addWidget(self.tabs)
-        reports = QWidget()
-        report_layout = QVBoxLayout(reports)
-        dates = QHBoxLayout()
-        self.from_date = QDateEdit(QDate.currentDate().addDays(-30))
-        self.to_date = QDateEdit(QDate.currentDate())
-        for label, field in [('From:', self.from_date), ('To:', self.to_date)]:
-            field.setCalendarPopup(True)
-            dates.addWidget(QLabel(label))
-            dates.addWidget(field)
-        self.search = QLineEdit()
-        self.search.setPlaceholderText('Search name or employee ID')
-        dates.addWidget(self.search)
-        export = QPushButton('Export displayed sheet (CSV)')
-        export.clicked.connect(self.export_reports)
-        dates.addWidget(export)
-        report_layout.addLayout(dates)
-        self.attendance_table = self.table(['Location', 'Office', 'Name', 'Employee ID', 'Job Title',
-                                            'Date', 'Time In (WAT)', 'Time Out (WAT)', 'Minutes', 'Status'])
-        report_layout.addWidget(self.attendance_table)
-        self.tabs.addTab(reports, 'General attendance sheet')
+
+        self.attendance_table = self.table(['Location', 'Office', 'Name', 'Employee ID',
+                                           'Job Title', 'Date', 'Time In', 'Time Out', 'Minutes', 'Status'])
+        self.tabs.addTab(self.attendance_table, 'Attendance sheet')
+
         employees = QWidget()
         employee_layout = QVBoxLayout(employees)
-        actions = QHBoxLayout()
-        for label, action in [('+ Add employee', self.open_add_employee), ('Edit employee', self.edit_employee),
-                              ('Enroll fingerprint', self.enroll), ('Deactivate employee', self.deactivate)]:
-            button = QPushButton(label)
-            button.clicked.connect(action)
-            actions.addWidget(button)
-        employee_layout.addLayout(actions)
+        emp_buttons = QHBoxLayout()
+
+        add_emp = QPushButton('Register staff')
+        add_emp.clicked.connect(self.open_add_employee)
+        emp_buttons.addWidget(add_emp)
+
+        edit_emp = QPushButton('Edit staff')
+        edit_emp.clicked.connect(self.edit_employee)
+        emp_buttons.addWidget(edit_emp)
+
+        enroll_btn = QPushButton('Enroll fingerprint')
+        enroll_btn.clicked.connect(self.enroll)
+        emp_buttons.addWidget(enroll_btn)
+
+        deactivate_btn = QPushButton('Deactivate staff')
+        deactivate_btn.clicked.connect(self.deactivate)
+        emp_buttons.addWidget(deactivate_btn)
+
+        emp_buttons.addStretch()
+        employee_layout.addLayout(emp_buttons)
+
         self.emp_table = self.table(['Office', 'Employee ID', 'Name', 'Job Title', 'Status', 'Fingerprint'])
         employee_layout.addWidget(self.emp_table)
         self.tabs.addTab(employees, 'Manage employees')
+
         self.reset_button = QPushButton('Reset selected office login password')
         self.reset_button.clicked.connect(self.reset_office_password)
         layout.addWidget(self.reset_button)
+
         self.location_filter.currentIndexChanged.connect(self.refresh)
         self.office_filter.currentIndexChanged.connect(self.refresh)
+        self.cached_records = []
 
     @staticmethod
     def table(headers):
@@ -120,7 +226,7 @@ class DashboardWidget(QWidget):
     def set_user(self, user):
         self.user = user
         master = user['role'] == 'main_admin'
-        self.title.setText('Master admin — all offices' if master else OFFICE_MAP[user['office_id']]['name'])
+        self.title.setText('Master Admin (All Offices)' if master else OFFICE_MAP[user['office_id']]['name'])
         self.kiosk_button.setVisible(not master)
         self.reset_button.setVisible(master)
         self.location_filter.setEnabled(master)
@@ -136,64 +242,100 @@ class DashboardWidget(QWidget):
     def clear_data(self):
         self.user = None
         self.employees = {}
+        self.cached_records = []
         self.emp_table.setRowCount(0)
         self.attendance_table.setRowCount(0)
-        self.summary.clear()
 
     def query(self):
+        if self.user and self.user['role'] == 'office_admin':
+            return {'office_id': self.user['office_id']}
         selected = self.office_filter.currentData()
         location = self.location_filter.currentData()
         ids = [o['_id'] for o in OFFICES if (not selected or o['_id'] == selected)
                and (not location or o['location'] == location)]
         return {'office_id': {'$in': ids}}
 
-    def refresh(self):
+    def refresh(self, sync=None):
         if not self.user or not api.token:
             return
+        if self.from_date.date() > self.to_date.date():
+            QMessageBox.warning(self, 'Invalid Date', 'The start date must be before the end date.')
+            return
+
+        import os
+        is_sync = sync if sync is not None else (os.environ.get('QT_QPA_PLATFORM') == 'offscreen')
+        emp_query = self.query()
+        att_query = dict(self.query(), work_date={'$gte': self.from_date.date().toString('yyyy-MM-dd'),
+                                                  '$lte': self.to_date.date().toString('yyyy-MM-dd')})
+
+        if is_sync:
+            try:
+                db = ClientDatabase.get_db()
+                employees = list(db.employees.find(emp_query))
+                records = list(db.attendance_records.find(att_query))
+                today = datetime.now(LAGOS).strftime('%Y-%m-%d')
+                present_count = len({r['employee_id'] for r in records if r.get('work_date') == today and r.get('clock_in_at')})
+                self.on_data_loaded(employees, records, present_count)
+            except Exception as exc:
+                self.on_load_failed(str(exc))
+            return
+
+        self.summary.setText('Loading records from server...')
+
+        if self.loader and self.loader.isRunning():
+            self.loader.terminate()
+            self.loader.wait()
+
+        self.loader = DashboardLoader(emp_query, att_query)
+        self.loader.data_loaded.connect(self.on_data_loaded)
+        self.loader.load_failed.connect(self.on_load_failed)
+        self.loader.start()
+
+    def on_data_loaded(self, employees, records, present_count):
+        self.emp_table.setRowCount(0)
+        self.employees = {str(e['_id']): e for e in employees}
+        self.cached_records = records
+
+        for employee in sorted(employees, key=lambda e: (e.get('office_id', ''), e.get('full_name', ''))):
+            values = [OFFICE_MAP.get(employee.get('office_id'), {}).get('name', 'Unassigned'),
+                      employee.get('employee_no'), employee.get('full_name'), employee.get('job_title'),
+                      employee.get('status'), 'Enrolled' if employee.get('has_fingerprint') else 'Needs enrollment']
+            self.add_row(self.emp_table, values, str(employee['_id']))
+
+        self.populate_attendance_table(records)
+
+        active_ids = {e['_id'] for e in employees if e.get('status') == 'active'}
+        self.summary.setText(f'Active staff: {len(active_ids)}   |   Checked in today: {present_count}'
+                             f'   |   Not checked in: {max(0, len(active_ids) - present_count)}'
+                             f'   |   Displayed records: {self.attendance_table.rowCount()}')
+
+    def populate_attendance_table(self, records):
+        self.attendance_table.setRowCount(0)
+        search = self.search.text().strip().lower()
+        sorted_records = sorted(records, key=lambda r: (OFFICE_MAP.get(r.get('office_id'), {}).get('location', ''),
+                                                        r.get('office_id', ''), r.get('work_date', '')))
+        for record in sorted_records:
+            employee = self.employees.get(str(record['employee_id']), {})
+            name = employee.get('full_name', 'Archived employee')
+            number = employee.get('employee_no', '')
+            if search and search not in (name + ' ' + number).lower():
+                continue
+            office = OFFICE_MAP.get(record.get('office_id'), {})
+            values = [office.get('location', 'Unassigned'), office.get('name', 'Unassigned'), name, number,
+                      employee.get('job_title'), record.get('work_date'), local_time(record.get('clock_in_at')),
+                      local_time(record.get('clock_out_at')), record.get('minutes_worked'), record.get('status')]
+            self.add_row(self.attendance_table, values)
+
+    def apply_search_filter(self):
+        if hasattr(self, 'cached_records'):
+            self.populate_attendance_table(self.cached_records)
+
+    def on_load_failed(self, error_msg):
+        self.employees = {}
         self.emp_table.setRowCount(0)
         self.attendance_table.setRowCount(0)
-        self.summary.clear()
-        try:
-            if self.from_date.date() > self.to_date.date():
-                raise ValueError('The start date must be before the end date.')
-            db = ClientDatabase.get_db()
-            employees = list(db.employees.find(self.query()))
-            self.employees = {str(e['_id']): e for e in employees}
-            for employee in sorted(employees, key=lambda e: (e.get('office_id', ''), e.get('full_name', ''))):
-                values = [OFFICE_MAP.get(employee.get('office_id'), {}).get('name', 'Unassigned'),
-                          employee.get('employee_no'), employee.get('full_name'), employee.get('job_title'),
-                          employee.get('status'), 'Enrolled' if employee.get('has_fingerprint') else 'Needs enrollment']
-                self.add_row(self.emp_table, values, str(employee['_id']))
-            query = dict(self.query(), work_date={'$gte': self.from_date.date().toString('yyyy-MM-dd'),
-                                                  '$lte': self.to_date.date().toString('yyyy-MM-dd')})
-            records = list(db.attendance_records.find(query))
-            search = self.search.text().strip().lower()
-            records.sort(key=lambda r: (OFFICE_MAP.get(r.get('office_id'), {}).get('location', ''),
-                                       r.get('office_id', ''), r.get('work_date', '')))
-            for record in records:
-                employee = self.employees.get(str(record['employee_id']), {})
-                name = employee.get('full_name', 'Archived employee')
-                number = employee.get('employee_no', '')
-                if search and search not in (name + ' ' + number).lower():
-                    continue
-                office = OFFICE_MAP.get(record.get('office_id'), {})
-                values = [office.get('location', 'Unassigned'), office.get('name', 'Unassigned'), name, number,
-                          employee.get('job_title'), record.get('work_date'), local_time(record.get('clock_in_at')),
-                          local_time(record.get('clock_out_at')), record.get('minutes_worked'), record.get('status')]
-                self.add_row(self.attendance_table, values)
-            today = datetime.now(LAGOS).strftime('%Y-%m-%d')
-            active_ids = {e['_id'] for e in employees if e.get('status') == 'active'}
-            present_ids = set(db.attendance_records.distinct('employee_id', dict(self.query(), work_date=today,
-                                                                                 clock_in_at={'$ne': None})))
-            self.summary.setText(f'Active staff: {len(active_ids)}   |   Checked in today: {len(active_ids & present_ids)}'
-                                 f'   |   Not checked in: {len(active_ids - present_ids)}'
-                                 f'   |   Displayed records: {self.attendance_table.rowCount()}')
-        except Exception as exc:
-            self.employees = {}
-            self.emp_table.setRowCount(0)
-            self.attendance_table.setRowCount(0)
-            self.summary.setText('Could not load records. Check connection and refresh.')
-            QMessageBox.warning(self, 'Could not refresh', str(exc))
+        self.summary.setText('Could not load records. Check connection and refresh.')
+        QMessageBox.warning(self, 'Refresh Failed', error_msg)
 
     @staticmethod
     def add_row(table, values, record_id=None):
@@ -237,11 +379,20 @@ class DashboardWidget(QWidget):
             return
         if QMessageBox.question(self, 'Deactivate employee', 'Prevent future check-ins? Attendance history will be retained.') != QMessageBox.Yes:
             return
-        try:
-            ClientDatabase.get_db().employees.update_one({'_id': employee['_id']}, {'$set': {'status': 'inactive'}})
-            self.refresh()
-        except ValueError as exc:
-            QMessageBox.warning(self, 'Could not deactivate', str(exc))
+
+        self.summary.setText('Deactivating employee...')
+        self.deact_worker = DeactivateWorker(employee['_id'])
+        self.deact_worker.deactivate_success.connect(self.on_deactivate_success)
+        self.deact_worker.deactivate_failed.connect(self.on_deactivate_failed)
+        self.deact_worker.start()
+
+    def on_deactivate_success(self):
+        self.summary.setText('Employee deactivated successfully.')
+        self.refresh()
+
+    def on_deactivate_failed(self, error_msg):
+        self.summary.setText('Could not deactivate employee.')
+        QMessageBox.warning(self, 'Could not deactivate', error_msg)
 
     def export_reports(self):
         path, _ = QFileDialog.getSaveFileName(self, 'Export sheet', 'Attendance.csv', 'CSV (*.csv)')
@@ -261,21 +412,52 @@ class DashboardWidget(QWidget):
     def reset_office_password(self):
         office = self.office_filter.currentData()
         if not office:
-            QMessageBox.information(self, 'Choose office', 'Select one office in the office filter first.')
+            items = [OFFICE_MAP[oid]['name'] for oid in OFFICE_MAP]
+            item, ok = QInputDialog.getItem(self, 'Reset Office Password', 'Select Office Account:', items, 0, False)
+            if not ok or not item:
+                return
+            office = next(oid for oid in OFFICE_MAP if OFFICE_MAP[oid]['name'] == item)
+
+        office_name = OFFICE_MAP.get(office, {}).get('name', office)
+        if QMessageBox.question(self, 'Reset Office Password',
+                                f'This will generate a new temporary password for {office_name} and sign out all of its active terminals. Continue?') != QMessageBox.Yes:
             return
-        if QMessageBox.question(self, 'Reset office password', 'This will sign out all terminals for this office. Continue?') != QMessageBox.Yes:
-            return
-        try:
-            result = api.call(f'/offices/{office}/reset-password')
-            QMessageBox.information(self, 'Deliver privately', f"Username: {result['username']}\nTemporary password: {result['password']}\nShown once. Password change is required at next login.")
-        except ValueError as exc:
-            QMessageBox.warning(self, 'Reset failed', str(exc))
+
+        self.summary.setText(f'Resetting password for {office_name}...')
+        self.reset_worker = PasswordResetWorker(office, office_name)
+        self.reset_worker.reset_success.connect(self.on_reset_success)
+        self.reset_worker.reset_failed.connect(self.on_reset_failed)
+        self.reset_worker.start()
+
+    def on_reset_success(self, result, office_name):
+        self.summary.setText('Password reset successfully.')
+        QGuiApplication.clipboard().setText(result['password'])
+        QMessageBox.information(
+            self,
+            'Password Reset Complete',
+            f"Office: {office_name}\n"
+            f"Username: {result['username']}\n"
+            f"New Temporary Password: {result['password']}\n\n"
+            f"(Copied to clipboard. Deliver to office admin securely. They will be prompted to change it at next login.)"
+        )
+
+    def on_reset_failed(self, error_msg):
+        self.summary.setText('Password reset failed.')
+        QMessageBox.warning(self, 'Reset Failed', error_msg)
 
     def change_password(self):
         password, ok = QInputDialog.getText(self, 'Change password', 'At least 10 characters, letters, numbers and !@#$%&*?', QLineEdit.Password)
-        if ok:
-            try:
-                api.call('/password', {'password': password})
-                QMessageBox.information(self, 'Password updated', 'Your password was changed.')
-            except ValueError as exc:
-                QMessageBox.warning(self, 'Password not changed', str(exc))
+        if ok and password:
+            self.summary.setText('Updating your password...')
+            self.pw_worker = PasswordChangeWorker(password)
+            self.pw_worker.change_success.connect(self.on_change_password_success)
+            self.pw_worker.change_failed.connect(self.on_change_password_failed)
+            self.pw_worker.start()
+
+    def on_change_password_success(self):
+        self.summary.setText('Password updated successfully.')
+        QMessageBox.information(self, 'Password updated', 'Your password was changed.')
+
+    def on_change_password_failed(self, error_msg):
+        self.summary.setText('Password change failed.')
+        QMessageBox.warning(self, 'Password not changed', error_msg)

@@ -1,4 +1,4 @@
-# Start here — continuation prompt for Antigravity
+# Start here: continuation prompt for Antigravity
 
 Use the following prompt with access to the full working directory:
 

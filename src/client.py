@@ -12,16 +12,53 @@ def config_path():
     return Path(os.getenv("LOCALAPPDATA", Path.home())) / "RandaframesAttendance" / "client.json"
 
 
+DEFAULT_API_URL = "https://randaframes-attendance.onrender.com"
+
+
 class ApiClient:
     def __init__(self):
         self.token = None
         self.user = None
+        self.saved_token = None
+        self.saved_user = None
+        self._session = requests.Session()
+        from requests.adapters import HTTPAdapter
+        adapter = HTTPAdapter(pool_connections=20, pool_maxsize=20, max_retries=1)
+        self._session.mount("https://", adapter)
+        self._session.mount("http://", adapter)
+
         self.url = os.getenv("ATTENDANCE_API_URL", "")
         if not self.url and config_path().exists():
             try:
-                self.url = json.loads(config_path().read_text(encoding="utf-8")).get("api_url", "")
+                data = json.loads(config_path().read_text(encoding="utf-8"))
+                self.url = data.get("api_url", "")
+                self.saved_token = data.get("saved_token")
+                self.saved_user = data.get("saved_user")
             except (OSError, ValueError):
                 self.url = ""
+                self.saved_token = None
+                self.saved_user = None
+
+        if not self.url:
+            self.url = DEFAULT_API_URL
+
+    def save_config(self):
+        try:
+            config_path().parent.mkdir(parents=True, exist_ok=True)
+            payload = {"api_url": self.url}
+            if self.saved_token and self.saved_user:
+                payload["saved_token"] = self.saved_token
+                payload["saved_user"] = self.saved_user
+            config_path().write_text(json.dumps(payload), encoding="utf-8")
+        except Exception:
+            pass
+
+    def restore_saved_session(self):
+        if self.saved_token and self.saved_user:
+            self.token = self.saved_token
+            self.user = self.saved_user
+            return True
+        return False
 
     def configure(self, url):
         url = url.strip().rstrip("/")
@@ -31,16 +68,15 @@ class ApiClient:
         if parsed.scheme != "https" and not (parsed.scheme == "http" and parsed.hostname in ("localhost", "127.0.0.1")):
             raise ValueError("Use HTTPS for the central server (HTTP is allowed only on this PC for testing).")
         self.url = url
-        config_path().parent.mkdir(parents=True, exist_ok=True)
-        config_path().write_text(json.dumps({"api_url": url}), encoding="utf-8")
+        self.save_config()
 
     def call(self, path, body=None):
         if not self.url:
             raise ValueError("Enter the central server address first.")
         headers = {"Authorization": f"Bearer {self.token}"} if self.token else {}
         try:
-            response = requests.post(self.url + path, json=json.loads(json_util.dumps(body or {})),
-                                     headers=headers, timeout=(5, 30), allow_redirects=False)
+            response = self._session.post(self.url + path, json=json.loads(json_util.dumps(body or {})),
+                                          headers=headers, timeout=(5, 30), allow_redirects=False)
         except requests.RequestException:
             raise ValueError("Cannot reach the central server. Check your connection and retry; no success was confirmed.") from None
         if not 200 <= response.status_code < 300:
@@ -56,6 +92,10 @@ class ApiClient:
     def login(self, username, password):
         result = self.call("/login", {"username": username, "password": password})
         self.token, self.user = result["token"], result["user"]
+        if self.user.get("role") == "office_admin":
+            self.saved_token = self.token
+            self.saved_user = self.user
+            self.save_config()
         return self.user
 
     def logout(self):
@@ -64,6 +104,8 @@ class ApiClient:
                 self.call("/logout")
         finally:
             self.token = self.user = None
+            self.saved_token = self.saved_user = None
+            self.save_config()
 
 
 api = ApiClient()

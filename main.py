@@ -26,12 +26,21 @@ class MainWindow(QMainWindow):
         for widget in (self.login_view, self.dashboard_view, self.kiosk_view):
             self.stacked_widget.addWidget(widget)
         self.login_view.login_successful.connect(self.show_dashboard)
-        self.kiosk_view.login_requested.connect(self.show_login)
-        self.dashboard_view.logout_requested.connect(self.show_login)
+        self.login_view.cancel_requested.connect(self.return_to_kiosk)
+        self.kiosk_view.login_requested.connect(self.show_login_from_kiosk)
+        self.dashboard_view.logout_requested.connect(self.show_login_from_dashboard)
         self.dashboard_view.kiosk_requested.connect(self.show_kiosk)
         self.stacked_widget.setCurrentWidget(self.login_view)
+        # Voice intro on startup
+        from src.utils import speak
+        speak("Welcome to Randaframes Attendance System.")
 
-    def show_login(self):
+    def show_login_from_kiosk(self):
+        self.kiosk_view.stop_scanner()
+        # Keep kiosk token in memory so Back to Kiosk can resume immediately
+        self.stacked_widget.setCurrentWidget(self.login_view)
+
+    def show_login_from_dashboard(self):
         self.kiosk_view.stop_scanner()
         try:
             api.logout()
@@ -39,6 +48,14 @@ class MainWindow(QMainWindow):
             pass
         self.dashboard_view.clear_data()
         self.stacked_widget.setCurrentWidget(self.login_view)
+
+    def return_to_kiosk(self):
+        if api.token or api.restore_saved_session():
+            self.stacked_widget.setCurrentWidget(self.kiosk_view)
+            self.kiosk_view.start_scanner()
+        else:
+            self.stacked_widget.setCurrentWidget(self.kiosk_view)
+            self.kiosk_view.update_status("Please click 'Admin Login' to log in with an office account first.")
 
     def show_dashboard(self, user):
         self.dashboard_view.set_user(user)
@@ -56,10 +73,6 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         self.kiosk_view.stop_scanner()
         self.scanner_provider.close()
-        try:
-            api.logout()
-        except ValueError:
-            pass
         event.accept()
 
 

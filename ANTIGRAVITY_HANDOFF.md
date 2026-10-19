@@ -1,4 +1,4 @@
-# Randaframes Attendance — Antigravity engineering handoff
+# Randaframes Attendance: Antigravity engineering handoff
 
 Prepared: 19 October 2026. Release artifact version: **2.0.0**.
 
