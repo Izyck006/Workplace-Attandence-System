@@ -2,7 +2,7 @@ from PySide6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushBu
 from PySide6.QtCore import Qt, QTimer
 from src.scanner.worker import ScannerWorker
 from src.services.fingerprint import FingerprintMatcher
-import pickle
+
 
 class EnrollFingerprintDialog(QDialog):
     def __init__(self, employee_id, scanner_provider, parent=None):
@@ -11,15 +11,30 @@ class EnrollFingerprintDialog(QDialog):
         self.scanner_provider = scanner_provider
         self.worker = None
         self.step = 0
-        self.instructions = [
-            "Capture 1 of 3: Place both thumbs on the scanner.",
-            "Capture 2 of 3: Lift and place both thumbs again.",
-            "Capture 3 of 3: Lift and place both thumbs one last time."
-        ]
-        self.image_types = [3, 3, 3] 
-        self.captured_templates = []
         
-        self.setWindowTitle("Enroll Fingerprints (Thumbs Capture)")
+        scanner = getattr(self.scanner_provider, 'scanner', None)
+        is_two_finger = False
+        if scanner and hasattr(scanner, 'is_capture_available'):
+            is_two_finger = scanner.is_capture_available(3)
+            
+        if is_two_finger:
+            self.instructions = [
+                "Capture 1 of 3: Place both thumbs on the scanner.",
+                "Capture 2 of 3: Lift and place both thumbs again.",
+                "Capture 3 of 3: Lift and place both thumbs one last time."
+            ]
+            self.image_types = [3, 3, 3]
+            self.setWindowTitle("Enroll Fingerprints (Dual Finger)")
+        else:
+            self.instructions = [
+                "Capture 1 of 3: Place your finger on the scanner.",
+                "Capture 2 of 3: Lift and place your finger again.",
+                "Capture 3 of 3: Lift and place your finger one last time."
+            ]
+            self.image_types = [2, 2, 2]
+            self.setWindowTitle("Enroll Fingerprints (Single Finger)")
+            
+        self.captured_templates = []
         self.setFixedSize(600, 500)
         self.setup_ui()
         
@@ -55,6 +70,8 @@ class EnrollFingerprintDialog(QDialog):
         self.stop_scanner()
         
     def start_scanner(self):
+        if not self.isVisible():
+            return
         if not self.scanner_provider.scanner:
             self.status_label.setText("Scanner not connected!")
             return
@@ -71,10 +88,12 @@ class EnrollFingerprintDialog(QDialog):
             self.worker.start()
             
     def stop_scanner(self):
+        if hasattr(self, 'countdown_timer'):
+            self.countdown_timer.stop()
         if self.worker and self.worker.isRunning():
             self.worker.stop()
             self.worker.wait() 
-            self.worker = None
+        self.worker = None
             
     def on_status(self, msg):
         pass
@@ -130,7 +149,7 @@ class EnrollFingerprintDialog(QDialog):
             self.countdown_callback()
         
     def save_templates(self):
-        from src.data.database import DatabaseManager
+        from src.client import ClientDatabase as DatabaseManager
         from bson import ObjectId
         import datetime
         
@@ -149,18 +168,12 @@ class EnrollFingerprintDialog(QDialog):
             self.reject()
             return
             
-        import zlib
-        desc_bytes = zlib.compress(pickle.dumps(all_descriptors))
-        
-        db.employees.update_one(
-            {"_id": ObjectId(self.employee_id)},
-            {"$set": {
-                "fingerprint_descriptors": desc_bytes,
-                "enrolled_fingers": 2,
-                "has_fingerprint": True,
-                "updated_at": datetime.datetime.now()
-            }}
-        )
-        
-        QMessageBox.information(self, "Success", "Thumbprints saved securely to employee profile!")
+        from src.client import api
+        try:
+            api.call(f'/employees/{self.employee_id}/fingerprint',
+                     {'samples': [descriptors.tolist() for descriptors in all_descriptors]})
+        except ValueError as exc:
+            QMessageBox.critical(self, 'Enrollment not saved', str(exc))
+            return
+        QMessageBox.information(self, 'Success', 'Fingerprints enrolled for this office.')
         self.accept()

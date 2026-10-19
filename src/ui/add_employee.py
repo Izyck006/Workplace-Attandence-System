@@ -12,7 +12,7 @@ class AddEmployeeDialog(QDialog):
         super().__init__(parent)
         self.employee_doc = employee_doc
         self.setWindowTitle("Edit Employee" if employee_doc else "Add New Employee")
-        self.setFixedSize(500, 450)
+        self.setMinimumSize(500, 650)
         self.emp_repo = EmployeeRepository()
         self.photo_bytes = None
         self.setup_ui()
@@ -62,6 +62,17 @@ class AddEmployeeDialog(QDialog):
         self.dept_input.addItems(["Engineering", "HR", "Groups", "Logistics", "Institute", "IT"])
         layout.addWidget(QLabel("Department:"))
         layout.addWidget(self.dept_input)
+        from src.client import api
+        from src.offices import OFFICES
+        self.office_input = QComboBox()
+        for office in OFFICES:
+            if api.user['role'] == 'main_admin' or office['_id'] == api.user.get('office_id'):
+                self.office_input.addItem(office['name'], office['_id'])
+        if self.employee_doc:
+            self.office_input.setCurrentIndex(self.office_input.findData(self.employee_doc.get('office_id')))
+            self.office_input.setEnabled(False)
+        layout.addWidget(QLabel('Office:'))
+        layout.addWidget(self.office_input)
 
         
         btn_layout = QHBoxLayout()
@@ -85,7 +96,7 @@ class AddEmployeeDialog(QDialog):
         dept_name = "Engineering"
         dept_id = self.employee_doc.get("department_id")
         if dept_id:
-            from src.data.database import DatabaseManager
+            from src.client import ClientDatabase as DatabaseManager
             db = DatabaseManager.get_db()
             dept_doc = db.departments.find_one({"_id": dept_id})
             if dept_doc:
@@ -124,7 +135,7 @@ class AddEmployeeDialog(QDialog):
             emp_id = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
             
         try:
-            from src.data.database import DatabaseManager
+            from src.client import ClientDatabase as DatabaseManager
             db = DatabaseManager.get_db()
             
             
@@ -140,6 +151,7 @@ class AddEmployeeDialog(QDialog):
                 dept_id = dept_doc["_id"]
                 
             data = {
+                "office_id": self.office_input.currentData(),
                 "first_name": first_name,
                 "last_name": last_name,
                 "full_name": f"{first_name} {last_name}",
@@ -147,7 +159,7 @@ class AddEmployeeDialog(QDialog):
                 "employee_no": emp_id,
                 "job_title": job_title,
                 "department_id": dept_id,
-                "status": "active",
+                "status": self.employee_doc.get("status", "active") if self.employee_doc else "active",
                 "photo_bytes": self.photo_bytes,
                 "updated_at": datetime.datetime.now()
             }

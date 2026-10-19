@@ -1,0 +1,7 @@
+*
+!requirements-server.txt
+!src/
+!src/**
+src/**/__pycache__/
+src/scanner/
+src/ui/

@@ -2,6 +2,8 @@ import ctypes
 import os
 import platform
 import logging
+import sys
+from pathlib import Path
 from typing import Tuple, Optional
 
 logger = logging.getLogger(__name__)
@@ -10,8 +12,14 @@ logger = logging.getLogger(__name__)
 IBSU_MAX_STR_LEN = 256
 IBSU_STATUS_OK = 0
 IBSU_ERR_DEVICE_NOT_FOUND = -1
+IBSU_ERR_CAPTURE_STILL_RUNNING = -303
+IBSU_ERR_CAPTURE_INVALID_MODE = -305
+
+IBSU_IMAGE_TYPE_NONE = 0
 IBSU_IMAGE_TYPE_ROLL_SINGLE_FINGER = 1
 IBSU_IMAGE_TYPE_FLAT_SINGLE_FINGER = 2
+IBSU_IMAGE_TYPE_FLAT_TWO_FINGERS = 3
+IBSU_IMAGE_TYPE_FLAT_FOUR_FINGERS = 4
 IBSU_IMAGE_RESOLUTION_500 = 500
 
 class IBSU_ImageData(ctypes.Structure):
@@ -33,6 +41,7 @@ class KojackScanner:
     """
     Python wrapper for the Integrated Biometrics IBScanUltimate SDK.
     Uses ctypes to interface with IBScanUltimate.dll.
+    Supports Columbo, Kojack, Watson, Sherlock and other IB scanners.
     """
     def __init__(self):
         self._dll = None
@@ -45,11 +54,18 @@ class KojackScanner:
         try:
             if platform.system() == "Windows":
                 
-                default_path = r"C:\Program Files\Integrated Biometrics\IBScanUltimateSDK_x64\Bin\IBScanUltimate.dll"
-                if not os.path.exists(default_path):
-                    logger.warning(f"IBScanUltimate.dll not found at {default_path}")
+                roots = [Path(getattr(sys, '_MEIPASS', Path(__file__).resolve().parents[2])) / 'scanner_runtime']
+                if os.getenv('IBSCAN_SDK_DIR'):
+                    roots.insert(0, Path(os.environ['IBSCAN_SDK_DIR']))
+                roots.append(Path(os.environ.get('ProgramFiles', r'C:\Program Files')) /
+                             'Integrated Biometrics' / 'IBScanUltimateSDK_x64' / 'Bin')
+                root = next((root for root in roots if (root / 'IBScanUltimate.dll').is_file()), None)
+                if root is None:
+                    logger.warning("Scanner SDK missing. Install the x64 Integrated Biometrics SDK or provide scanner_runtime.")
                     return
-                self._dll = ctypes.windll.LoadLibrary(default_path)
+                if hasattr(os, 'add_dll_directory'):
+                    self._dll_directory = os.add_dll_directory(str(root))
+                self._dll = ctypes.WinDLL(str(root / 'IBScanUltimate.dll'))
             else:
                 logger.warning("OS not supported for this wrapper version.")
                 return
@@ -60,22 +76,31 @@ class KojackScanner:
             logger.error(f"Failed to load IBScanUltimate DLL: {e}")
 
     def _setup_function_signatures(self):
-        
         self._dll.IBSU_GetDeviceCount.argtypes = [ctypes.POINTER(ctypes.c_int)]
         self._dll.IBSU_GetDeviceCount.restype = ctypes.c_int
-        
         
         self._dll.IBSU_OpenDevice.argtypes = [ctypes.c_int, ctypes.POINTER(ctypes.c_int)]
         self._dll.IBSU_OpenDevice.restype = ctypes.c_int
         
-        
         self._dll.IBSU_CloseDevice.argtypes = [ctypes.c_int]
         self._dll.IBSU_CloseDevice.restype = ctypes.c_int
-        
         
         self._dll.IBSU_BeginCaptureImage.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_uint32]
         self._dll.IBSU_BeginCaptureImage.restype = ctypes.c_int
 
+        if hasattr(self._dll, "IBSU_IsCaptureAvailable"):
+            self._dll.IBSU_IsCaptureAvailable.argtypes = [
+                ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.POINTER(ctypes.c_int)
+            ]
+            self._dll.IBSU_IsCaptureAvailable.restype = ctypes.c_int
+        
+        if hasattr(self._dll, "IBSU_TakeResultImageManually"):
+            self._dll.IBSU_TakeResultImageManually.argtypes = [ctypes.c_int]
+            self._dll.IBSU_TakeResultImageManually.restype = ctypes.c_int
+
+        if hasattr(self._dll, "IBSU_CancelCaptureImage"):
+            self._dll.IBSU_CancelCaptureImage.argtypes = [ctypes.c_int]
+            self._dll.IBSU_CancelCaptureImage.restype = ctypes.c_int
         
         self._dll.IBSU_BGetImage.argtypes = [
             ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, 
@@ -108,17 +133,49 @@ class KojackScanner:
         logger.error(f"Failed to open device {index}: status {status}")
         return False
 
-    def begin_capture(self, image_type: int = 4) -> bool:
+    def is_capture_available(self, image_type: int, resolution: int = 500) -> bool:
+        """Check if the connected device supports the given image type and resolution."""
+        if not self._dll or self._handle is None:
+            return False
+        if not hasattr(self._dll, "IBSU_IsCaptureAvailable"):
+            return True
+        avail = ctypes.c_int(0)
+        status = self._dll.IBSU_IsCaptureAvailable(
+            self._handle, image_type, resolution, ctypes.byref(avail)
+        )
+        return status == IBSU_STATUS_OK and bool(avail.value)
+
+    def get_supported_image_type(self, preferred: Optional[int] = None) -> int:
+        """
+        Returns a valid image type supported by the currently connected scanner.
+        If preferred is available, returns it. Otherwise falls back in order:
+        FLAT_SINGLE_FINGER (2) -> FLAT_TWO_FINGERS (3) -> FLAT_FOUR_FINGERS (4) -> ROLL_SINGLE_FINGER (1).
+        """
+        if preferred is not None and self.is_capture_available(preferred):
+            return preferred
+            
+        for candidate in [
+            IBSU_IMAGE_TYPE_FLAT_SINGLE_FINGER,
+            IBSU_IMAGE_TYPE_FLAT_TWO_FINGERS,
+            IBSU_IMAGE_TYPE_FLAT_FOUR_FINGERS,
+            IBSU_IMAGE_TYPE_ROLL_SINGLE_FINGER,
+        ]:
+            if self.is_capture_available(candidate):
+                return candidate
+        return preferred if preferred is not None else IBSU_IMAGE_TYPE_FLAT_SINGLE_FINGER
+
+    def begin_capture(self, image_type: Optional[int] = None) -> bool:
         if not self._dll or self._handle is None:
             return False
         
+        target_type = self.get_supported_image_type(image_type)
         
-        status = self._dll.IBSU_BeginCaptureImage(self._handle, image_type, 500, 3)
-        if status != IBSU_STATUS_OK and status not in (-303, -205): 
-            print(f"Failed to begin capture: {status}")
-            logger.error(f"Failed to begin capture: {status}")
+        status = self._dll.IBSU_BeginCaptureImage(self._handle, target_type, 500, 3)
+        if status != IBSU_STATUS_OK and status not in (IBSU_ERR_CAPTURE_STILL_RUNNING, -205): 
+            print(f"Failed to begin capture: {status} (type: {target_type})")
+            logger.error(f"Failed to begin capture: {status} (type: {target_type})")
             return False
-        return status == IBSU_STATUS_OK or status == -303
+        return status == IBSU_STATUS_OK or status == IBSU_ERR_CAPTURE_STILL_RUNNING
 
     def block_get_image(self, ignore_preview=True):
         if not self._dll or self._handle is None:
@@ -171,7 +228,16 @@ class KojackScanner:
             return False
         return True
 
+    def cancel_capture(self) -> bool:
+        if not self._dll or self._handle is None:
+            return False
+        if hasattr(self._dll, "IBSU_CancelCaptureImage"):
+            status = self._dll.IBSU_CancelCaptureImage(self._handle)
+            return status == IBSU_STATUS_OK
+        return False
+
     def close_device(self):
         if self._dll and self._handle is not None:
+            self.cancel_capture()
             self._dll.IBSU_CloseDevice(self._handle)
             self._handle = None

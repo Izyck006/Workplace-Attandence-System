@@ -3,7 +3,7 @@ from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QLineEdit, QPushButt
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont, QPixmap
 from src.utils import get_asset_path
-from src.services.auth import AuthService
+from src.client import api
 
 class LoginWidget(QWidget):
     login_successful = Signal(dict)
@@ -11,7 +11,6 @@ class LoginWidget(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.auth_service = AuthService()
         self.setup_ui()
 
     def setup_ui(self):
@@ -52,11 +51,17 @@ class LoginWidget(QWidget):
 
         layout.addWidget(title)
         layout.addSpacing(20)
+        self.server_input = QLineEdit(api.url)
+        self.server_input.setPlaceholderText("https://attendance.your-company.com")
+        self.server_input.setFixedWidth(360)
+        layout.addWidget(QLabel("Central server address:"), alignment=Qt.AlignCenter)
+        layout.addWidget(self.server_input, alignment=Qt.AlignCenter)
         layout.addWidget(self.username_input, alignment=Qt.AlignCenter)
         layout.addWidget(self.password_input, alignment=Qt.AlignCenter)
         layout.addSpacing(20)
         layout.addWidget(self.login_btn, alignment=Qt.AlignCenter)
-        layout.addWidget(self.cancel_btn, alignment=Qt.AlignCenter)
+        self.cancel_btn.hide()
+        self.password_input.returnPressed.connect(self.on_login)
 
     def on_login(self):
         username = self.username_input.text().strip()
@@ -67,7 +72,17 @@ class LoginWidget(QWidget):
             return
 
         try:
-            user = self.auth_service.authenticate(username, password)
+            api.configure(self.server_input.text())
+            user = api.login(username, password)
+            if user.get("must_change_password"):
+                from PySide6.QtWidgets import QInputDialog
+                new_password, ok = QInputDialog.getText(self, "Change temporary password",
+                    "New password: at least 10 characters, letters, numbers and a symbol (!@#$%&*?)", QLineEdit.Password)
+                if not ok:
+                    api.logout()
+                    return
+                api.call("/password", {"password": new_password})
+                user["must_change_password"] = False
             self.username_input.clear()
             self.password_input.clear()
             self.login_successful.emit(user)

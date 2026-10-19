@@ -31,3 +31,12 @@ RandaframesAttendance.exe
 .DS_Store
 Thumbs.db
 .vscode/
+private/
+release/
+scanner_runtime/
+installer/vendor/
+tools/
+pytest-cache-files-*/
+.pytest_cache/
+captures/
+!packaging/desktop.spec

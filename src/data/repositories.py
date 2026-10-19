@@ -1,6 +1,6 @@
 from typing import List, Optional, Dict, Any
 from bson.objectid import ObjectId
-from src.data.database import DatabaseManager
+from src.client import ClientDatabase as DatabaseManager
 
 class DepartmentRepository:
     def __init__(self):

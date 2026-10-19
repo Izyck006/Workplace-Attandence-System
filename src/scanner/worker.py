@@ -25,17 +25,17 @@ class ScannerWorker(QThread):
     scan_status = Signal(str)
     preview_frame = Signal(bytes, int, int)
 
-    def __init__(self, scanner_instance, parent=None, image_type=4):
+    def __init__(self, scanner_instance, parent=None, image_type=None):
         super().__init__(parent)
         self._is_running = True
         self.scanner = scanner_instance
         self.image_type = image_type
 
     def run(self):
-        self.scan_status.emit("Initializing Kojack scanner...")
+        self.scan_status.emit("Initializing scanner...")
         
         
-        if self.scanner.get_device_count() == 0:
+        if not self.scanner or self.scanner.get_device_count() == 0:
             self.scan_error.emit("No scanner detected.")
             return
             
@@ -50,7 +50,9 @@ class ScannerWorker(QThread):
         try:
             self.scan_status.emit("Scanner Active: Waiting for finger...")
             
-            self.scanner.begin_capture(self.image_type)
+            if not self.scanner.begin_capture(self.image_type):
+                self.scan_error.emit("Capture could not start. Reconnect the scanner and try again.")
+                return
             
             good_frame_count = 0
             
@@ -93,10 +95,7 @@ class ScannerWorker(QThread):
                             
                         time.sleep(0.01)
                 else:
-                    
                     time.sleep(0.05)
-                    
-                    self.scanner.begin_capture(self.image_type)
                 
         except Exception as e:
             try:
@@ -106,8 +105,10 @@ class ScannerWorker(QThread):
                 pass
             self.scan_error.emit(str(e))
         finally:
-            pass 
+            self.scanner.cancel_capture()
 
     def stop(self):
         self._is_running = False
+        if self.scanner:
+            self.scanner.cancel_capture()
         self.wait()

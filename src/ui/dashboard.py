@@ -1,471 +1,281 @@
-import os
-from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
-    QTableWidget, QTableWidgetItem, QHeaderView, QPushButton,
-    QFrame, QTabWidget, QComboBox, QDateEdit, QLineEdit
-)
+﻿import csv
+from datetime import datetime, timedelta, timezone
+from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+    QTabWidget, QComboBox, QDateEdit, QLineEdit, QTableWidget, QTableWidgetItem,
+    QHeaderView, QMessageBox, QFileDialog, QInputDialog)
 from PySide6.QtCore import Qt, QDate, Signal
-from PySide6.QtGui import QFont, QColor, QPixmap
-from src.utils import get_asset_path
-from src.data.repositories import EmployeeRepository
-from src.data.database import DatabaseManager
+from bson import ObjectId
+from src.client import api, ClientDatabase
+from src.offices import OFFICES, OFFICE_MAP
+
+LAGOS = timezone(timedelta(hours=1))
+
+
+def local_time(value):
+    if not value:
+        return '--:--'
+    return value.replace(tzinfo=timezone.utc).astimezone(LAGOS).strftime('%H:%M:%S')
+
+
+def csv_safe(value):
+    text = str(value or '')
+    return "'" + text if text.lstrip().startswith(('=', '+', '-', '@', '\t', '\r', '\n')) else text
+
 
 class DashboardWidget(QWidget):
     logout_requested = Signal()
+    kiosk_requested = Signal()
 
     def __init__(self, scanner_provider=None, parent=None):
         super().__init__(parent)
         self.scanner_provider = scanner_provider
-        self.setup_ui()
-
-    def setup_ui(self):
-        main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(10, 10, 10, 10)
-        
-        
-        header_layout = QHBoxLayout()
-        logo_path = get_asset_path("randaframes logo.jpg")
-        if not os.path.exists(logo_path):
-            logo_path = get_asset_path("icon.ico")
-        if os.path.exists(logo_path):
-            logo_label = QLabel()
-            pixmap = QPixmap(logo_path).scaled(36, 36, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            logo_label.setPixmap(pixmap)
-            logo_label.setStyleSheet("margin-right: 8px;")
-            header_layout.addWidget(logo_label)
-
-        title_label = QLabel("Randaframes Admin Console")
-        title_label.setFont(QFont("Arial", 18, QFont.Bold))
-        
-        logout_btn = QPushButton("Log Out")
-        logout_btn.setFixedWidth(100)
-        logout_btn.clicked.connect(self.logout_requested.emit)
-        
-        header_layout.addWidget(title_label)
-        header_layout.addStretch()
-        header_layout.addWidget(logout_btn)
-        main_layout.addLayout(header_layout)
-
-        
+        self.user = None
+        self.employees = {}
+        layout = QVBoxLayout(self)
+        header = QHBoxLayout()
+        self.title = QLabel('Randaframes Attendance')
+        self.title.setStyleSheet('font-size: 22px; font-weight: bold;')
+        header.addWidget(self.title)
+        header.addStretch()
+        self.kiosk_button = QPushButton('Open attendance terminal')
+        self.kiosk_button.clicked.connect(self.kiosk_requested.emit)
+        header.addWidget(self.kiosk_button)
+        password_button = QPushButton('Change password')
+        password_button.clicked.connect(self.change_password)
+        header.addWidget(password_button)
+        logout = QPushButton('Log out')
+        logout.clicked.connect(self.logout_requested.emit)
+        header.addWidget(logout)
+        layout.addLayout(header)
+        self.summary = QLabel('')
+        layout.addWidget(self.summary)
+        filters = QHBoxLayout()
+        self.location_filter = QComboBox()
+        self.location_filter.addItem('All locations', None)
+        for location in sorted({o['location'] for o in OFFICES}):
+            self.location_filter.addItem(location, location)
+        self.office_filter = QComboBox()
+        self.office_filter.addItem('All offices', None)
+        for office in OFFICES:
+            self.office_filter.addItem(office['name'], office['_id'])
+        filters.addWidget(QLabel('Location:'))
+        filters.addWidget(self.location_filter)
+        filters.addWidget(QLabel('Office:'))
+        filters.addWidget(self.office_filter)
+        self.refresh_button = QPushButton('Refresh')
+        self.refresh_button.clicked.connect(self.refresh)
+        filters.addWidget(self.refresh_button)
+        layout.addLayout(filters)
         self.tabs = QTabWidget()
-        
-        self.tab_overview = QWidget()
-        self.tab_attendance = QWidget()
-        self.tab_employees = QWidget()
-        
-        self.tabs.addTab(self.tab_overview, "Overview")
-        self.tabs.addTab(self.tab_attendance, "Reports")
-        self.tabs.addTab(self.tab_employees, "Manage Employees")
-        self.tabs.currentChanged.connect(self.on_tab_changed)
-        
-        self.setup_overview_tab()
-        self.setup_attendance_tab()
-        self.setup_employees_tab()
-        
-        main_layout.addWidget(self.tabs)
+        layout.addWidget(self.tabs)
+        reports = QWidget()
+        report_layout = QVBoxLayout(reports)
+        dates = QHBoxLayout()
+        self.from_date = QDateEdit(QDate.currentDate().addDays(-30))
+        self.to_date = QDateEdit(QDate.currentDate())
+        for label, field in [('From:', self.from_date), ('To:', self.to_date)]:
+            field.setCalendarPopup(True)
+            dates.addWidget(QLabel(label))
+            dates.addWidget(field)
+        self.search = QLineEdit()
+        self.search.setPlaceholderText('Search name or employee ID')
+        dates.addWidget(self.search)
+        export = QPushButton('Export displayed sheet (CSV)')
+        export.clicked.connect(self.export_reports)
+        dates.addWidget(export)
+        report_layout.addLayout(dates)
+        self.attendance_table = self.table(['Location', 'Office', 'Name', 'Employee ID', 'Job Title',
+                                            'Date', 'Time In (WAT)', 'Time Out (WAT)', 'Minutes', 'Status'])
+        report_layout.addWidget(self.attendance_table)
+        self.tabs.addTab(reports, 'General attendance sheet')
+        employees = QWidget()
+        employee_layout = QVBoxLayout(employees)
+        actions = QHBoxLayout()
+        for label, action in [('+ Add employee', self.open_add_employee), ('Edit employee', self.edit_employee),
+                              ('Enroll fingerprint', self.enroll), ('Deactivate employee', self.deactivate)]:
+            button = QPushButton(label)
+            button.clicked.connect(action)
+            actions.addWidget(button)
+        employee_layout.addLayout(actions)
+        self.emp_table = self.table(['Office', 'Employee ID', 'Name', 'Job Title', 'Status', 'Fingerprint'])
+        employee_layout.addWidget(self.emp_table)
+        self.tabs.addTab(employees, 'Manage employees')
+        self.reset_button = QPushButton('Reset selected office login password')
+        self.reset_button.clicked.connect(self.reset_office_password)
+        layout.addWidget(self.reset_button)
+        self.location_filter.currentIndexChanged.connect(self.refresh)
+        self.office_filter.currentIndexChanged.connect(self.refresh)
 
-    def showEvent(self, event):
-        super().showEvent(event)
-        self.refresh_overview_kpis()
+    @staticmethod
+    def table(headers):
+        table = QTableWidget(0, len(headers))
+        table.setHorizontalHeaderLabels(headers)
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        table.setEditTriggers(QTableWidget.NoEditTriggers)
+        table.setSelectionBehavior(QTableWidget.SelectRows)
+        table.setSelectionMode(QTableWidget.SingleSelection)
+        table.setAlternatingRowColors(True)
+        return table
 
-    def on_tab_changed(self, index):
-        if index == 0:
-            self.refresh_overview_kpis()
-        elif index == 1:
-            self.load_attendance()
-        elif index == 2:
-            self.load_employees()
+    def set_user(self, user):
+        self.user = user
+        master = user['role'] == 'main_admin'
+        self.title.setText('Master admin — all offices' if master else OFFICE_MAP[user['office_id']]['name'])
+        self.kiosk_button.setVisible(not master)
+        self.reset_button.setVisible(master)
+        self.location_filter.setEnabled(master)
+        self.office_filter.setEnabled(master)
+        self.location_filter.blockSignals(True)
+        self.office_filter.blockSignals(True)
+        self.location_filter.setCurrentIndex(0)
+        self.office_filter.setCurrentIndex(0 if master else self.office_filter.findData(user['office_id']))
+        self.location_filter.blockSignals(False)
+        self.office_filter.blockSignals(False)
+        self.refresh()
 
-    def setup_overview_tab(self):
-        layout = QVBoxLayout(self.tab_overview)
-        layout.setSpacing(20)
-        
-        kpi_layout = QHBoxLayout()
-        card_total, self.total_emp_label = self.create_kpi_card("Total Employees", "0", "#e3f2fd")
-        card_present, self.present_today_label = self.create_kpi_card("Present Today", "0", "#e8f5e9")
-        card_absent, self.absent_today_label = self.create_kpi_card("Absent / Leave", "0", "#ffebee")
-        
-        kpi_layout.addWidget(card_total)
-        kpi_layout.addWidget(card_present)
-        kpi_layout.addWidget(card_absent)
-        
-        layout.addLayout(kpi_layout)
-        
-        backup_layout = QHBoxLayout()
-        backup_btn = QPushButton("Run Daily Backup to SQLite")
-        backup_btn.setFixedWidth(200)
-        backup_btn.clicked.connect(self.run_backup)
-        
-        backup_layout.addStretch()
-        backup_layout.addWidget(backup_btn)
-        
-        layout.addLayout(backup_layout)
-        layout.addStretch()
-
-        self.refresh_overview_kpis()
-
-    def refresh_overview_kpis(self):
-        try:
-            import datetime
-            db = DatabaseManager.get_db()
-            total_employees = db.employees.count_documents({})
-            today_str = datetime.datetime.now().strftime("%Y-%m-%d")
-            present_emp_ids = db.attendance_records.distinct("employee_id", {"work_date": today_str, "status": "present"})
-            present_today = len(present_emp_ids)
-            absent_today = max(0, total_employees - present_today)
-            if hasattr(self, 'total_emp_label'):
-                self.total_emp_label.setText(str(total_employees))
-            if hasattr(self, 'present_today_label'):
-                self.present_today_label.setText(str(present_today))
-            if hasattr(self, 'absent_today_label'):
-                self.absent_today_label.setText(str(absent_today))
-        except Exception:
-            pass
-
-    def run_backup(self):
-        from src.services.backup import BackupService
-        from PySide6.QtWidgets import QMessageBox
-        try:
-            service = BackupService()
-            file_path, count = service.backup_daily_attendance()
-            QMessageBox.information(self, "Backup Successful", f"Backed up {count} records to:\n{file_path}")
-        except Exception as e:
-            QMessageBox.critical(self, "Backup Failed", str(e))
-
-    def setup_attendance_tab(self):
-        layout = QVBoxLayout(self.tab_attendance)
-        
-        
-        filter_layout = QHBoxLayout()
-        filter_layout.addWidget(QLabel("From:"))
-        self.from_date = QDateEdit()
-        self.from_date.setCalendarPopup(True)
-        self.from_date.setDate(QDate.currentDate().addDays(-30)) 
-        filter_layout.addWidget(self.from_date)
-        
-        filter_layout.addWidget(QLabel("To:"))
-        self.to_date = QDateEdit()
-        self.to_date.setCalendarPopup(True)
-        self.to_date.setDate(QDate.currentDate())
-        filter_layout.addWidget(self.to_date)
-        
-        view_reports_btn = QPushButton("View Reports")
-        view_reports_btn.setStyleSheet("background-color: #3b82f6; color: white;")
-        view_reports_btn.clicked.connect(self.load_attendance)
-        filter_layout.addWidget(view_reports_btn)
-        
-        filter_layout.addStretch()
-        
-        filter_layout.addWidget(QLabel("Search:"))
-        self.search_emp = QLineEdit()
-        self.search_emp.setPlaceholderText("Name, ID, or Dept...")
-        self.search_emp.textChanged.connect(self.load_attendance)
-        filter_layout.addWidget(self.search_emp)
-        
-        export_btn = QPushButton("Export CSV/Excel")
-        export_btn.clicked.connect(self.export_reports)
-        filter_layout.addWidget(export_btn)
-        
-        layout.addLayout(filter_layout)
-        
-        
-        self.attendance_table = QTableWidget(0, 7) 
-        self.attendance_table.setHorizontalHeaderLabels(["Name", "Employee ID.", "Job Title", "Date", "Time-In", "Time-Out", "Status"])
-        
-        
-        self.attendance_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.attendance_table.verticalHeader().setVisible(True) 
-        self.attendance_table.setShowGrid(True)
-        self.attendance_table.setAlternatingRowColors(False)
-        
-        excel_style = """
-            QTableWidget {
-                background-color: #ffffff;
-                color: #000000;
-                gridline-color: #d0d0d0;
-                font-family: 'Segoe UI', Calibri, Arial;
-                font-size: 11pt;
-                border: 1px solid #d0d0d0;
-            }
-            QTableWidget::item:selected {
-                background-color: #e3f2fd;
-                color: #000000;
-            }
-            QHeaderView::section {
-                background-color: #f3f3f3;
-                color: #000000;
-                padding: 4px;
-                border: 1px solid #d0d0d0;
-                font-family: 'Segoe UI', Calibri, Arial;
-                font-size: 11pt;
-            }
-            QTableCornerButton::section {
-                background-color: #f3f3f3;
-                border: 1px solid #d0d0d0;
-            }
-        """
-        self.attendance_table.setStyleSheet(excel_style)
-        
-        layout.addWidget(self.attendance_table)
-        self.load_attendance()
-
-    def setup_employees_tab(self):
-        layout = QVBoxLayout(self.tab_employees)
-        
-        action_layout = QHBoxLayout()
-        self.add_emp_btn = QPushButton("+ Add Employee")
-        self.add_emp_btn.clicked.connect(self.open_add_employee)
-        
-        self.edit_emp_btn = QPushButton("Edit Employee")
-        self.edit_emp_btn.clicked.connect(self.edit_employee)
-        
-        self.enroll_btn = QPushButton("Enroll Fingerprint")
-        self.enroll_btn.clicked.connect(lambda: self.open_enroll_fingerprint(None))
-        
-        self.delete_emp_btn = QPushButton("Delete Employee")
-        self.delete_emp_btn.setStyleSheet("background-color: #ff4c4c; color: white;")
-        self.delete_emp_btn.clicked.connect(self.delete_employee)
-        
-        action_layout.addWidget(self.add_emp_btn)
-        action_layout.addWidget(self.edit_emp_btn)
-        action_layout.addWidget(self.enroll_btn)
-        action_layout.addWidget(self.delete_emp_btn)
-        action_layout.addStretch()
-        
-        layout.addLayout(action_layout)
-        
-        self.emp_table = QTableWidget(0, 4)
-        self.emp_table.setHorizontalHeaderLabels(["Emp ID", "First Name", "Last Name", "Job Title"])
-        self.emp_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.emp_table.verticalHeader().setVisible(True)
-        self.emp_table.setShowGrid(True)
-        self.emp_table.setAlternatingRowColors(False)
-        self.emp_table.setStyleSheet("""
-            QTableWidget {
-                background-color: #ffffff;
-                color: #000000;
-                gridline-color: #d0d0d0;
-                font-family: 'Segoe UI', Calibri, Arial;
-                font-size: 11pt;
-                border: 1px solid #d0d0d0;
-            }
-            QTableWidget::item:selected {
-                background-color: #e3f2fd;
-                color: #000000;
-            }
-            QHeaderView::section {
-                background-color: #f3f3f3;
-                color: #000000;
-                padding: 4px;
-                border: 1px solid #d0d0d0;
-                font-family: 'Segoe UI', Calibri, Arial;
-                font-size: 11pt;
-            }
-            QTableCornerButton::section {
-                background-color: #f3f3f3;
-                border: 1px solid #d0d0d0;
-            }
-        """)
-        self.emp_table.setSelectionBehavior(QTableWidget.SelectRows) 
-        self.emp_table.setSelectionMode(QTableWidget.SingleSelection)
-        
-        layout.addWidget(self.emp_table)
-        self.load_employees()
-
-    def load_attendance(self):
-        self.attendance_table.setRowCount(0)
-        db = DatabaseManager.get_db()
-        try:
-            from_str = self.from_date.date().toString("yyyy-MM-dd")
-            to_str = self.to_date.date().toString("yyyy-MM-dd")
-            query = {"work_date": {"$gte": from_str, "$lte": to_str}}
-            
-            records = list(db.attendance_records.find(query).sort("work_date", -1))
-            search_text = self.search_emp.text().lower()
-            
-            row_idx = 0
-            for rec in records:
-                emp = db.employees.find_one({"_id": rec.get("employee_id")})
-                emp_name = f"{emp.get('first_name', '')} {emp.get('last_name', '')}" if emp else "Unknown"
-                
-                emp_id_str = str(emp.get("employee_id", "")) if emp else ""
-                job_title = emp.get("job_title", "N/A") if emp else "N/A"
-                
-                
-                if search_text and search_text not in emp_name.lower() and search_text not in emp_id_str.lower() and search_text not in job_title.lower():
-                    continue
-                
-                
-                clock_in = rec.get("clock_in_at")
-                clock_in_str = clock_in.strftime("%I:%M %p").lower() if clock_in else "--:--"
-                
-                clock_out = rec.get("clock_out_at")
-                clock_out_str = clock_out.strftime("%I:%M %p").lower() if clock_out else "--:--"
-                
-                status = rec.get("status", "Present")
-                
-                self.attendance_table.insertRow(row_idx)
-                self.attendance_table.setItem(row_idx, 0, QTableWidgetItem(emp_name))
-                self.attendance_table.setItem(row_idx, 1, QTableWidgetItem(emp_id_str))
-                self.attendance_table.setItem(row_idx, 2, QTableWidgetItem(job_title))
-                self.attendance_table.setItem(row_idx, 3, QTableWidgetItem(rec.get("work_date", "")))
-                self.attendance_table.setItem(row_idx, 4, QTableWidgetItem(clock_in_str))
-                self.attendance_table.setItem(row_idx, 5, QTableWidgetItem(clock_out_str))
-                self.attendance_table.setItem(row_idx, 6, QTableWidgetItem(status))
-                
-                row_idx += 1
-        except Exception as e:
-            print(f"Error loading attendance: {e}")
-            
-    def export_reports(self):
-        from PySide6.QtWidgets import QFileDialog, QMessageBox
-        import csv
-        
-        path, _ = QFileDialog.getSaveFileName(self, "Save Reports", "Attendance_Report.csv", "CSV Files (*.csv)")
-        if not path: return
-        
-        try:
-            with open(path, 'w', newline='', encoding='utf-8') as f:
-                writer = csv.writer(f)
-                headers = []
-                for i in range(self.attendance_table.columnCount()):
-                    headers.append(self.attendance_table.horizontalHeaderItem(i).text())
-                writer.writerow(headers)
-                
-                for row in range(self.attendance_table.rowCount()):
-                    row_data = []
-                    for col in range(self.attendance_table.columnCount()):
-                        item = self.attendance_table.item(row, col)
-                        row_data.append(item.text() if item else "")
-                    writer.writerow(row_data)
-            
-            QMessageBox.information(self, "Success", f"Reports successfully exported to {path}")
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to export: {str(e)}")
-
-    def load_employees(self):
+    def clear_data(self):
+        self.user = None
+        self.employees = {}
         self.emp_table.setRowCount(0)
-        emp_repo = EmployeeRepository()
-        db = DatabaseManager.get_db()
+        self.attendance_table.setRowCount(0)
+        self.summary.clear()
+
+    def query(self):
+        selected = self.office_filter.currentData()
+        location = self.location_filter.currentData()
+        ids = [o['_id'] for o in OFFICES if (not selected or o['_id'] == selected)
+               and (not location or o['location'] == location)]
+        return {'office_id': {'$in': ids}}
+
+    def refresh(self):
+        if not self.user or not api.token:
+            return
+        self.emp_table.setRowCount(0)
+        self.attendance_table.setRowCount(0)
+        self.summary.clear()
         try:
-            employees = emp_repo.get_all()
-            for row_idx, emp in enumerate(employees):
-                self.emp_table.insertRow(row_idx)
-                
-                
-                item_id = QTableWidgetItem(str(emp.get("employee_id", "")))
-                item_id.setData(Qt.UserRole, str(emp["_id"])) 
-                
-                self.emp_table.setItem(row_idx, 0, item_id)
-                self.emp_table.setItem(row_idx, 1, QTableWidgetItem(emp.get("first_name", "")))
-                self.emp_table.setItem(row_idx, 2, QTableWidgetItem(emp.get("last_name", "")))
-                self.emp_table.setItem(row_idx, 3, QTableWidgetItem(emp.get("job_title", "")))
-        except Exception as e:
-            print(f"Error loading employees: {e}")
-        self.refresh_overview_kpis()
+            if self.from_date.date() > self.to_date.date():
+                raise ValueError('The start date must be before the end date.')
+            db = ClientDatabase.get_db()
+            employees = list(db.employees.find(self.query()))
+            self.employees = {str(e['_id']): e for e in employees}
+            for employee in sorted(employees, key=lambda e: (e.get('office_id', ''), e.get('full_name', ''))):
+                values = [OFFICE_MAP.get(employee.get('office_id'), {}).get('name', 'Unassigned'),
+                          employee.get('employee_no'), employee.get('full_name'), employee.get('job_title'),
+                          employee.get('status'), 'Enrolled' if employee.get('has_fingerprint') else 'Needs enrollment']
+                self.add_row(self.emp_table, values, str(employee['_id']))
+            query = dict(self.query(), work_date={'$gte': self.from_date.date().toString('yyyy-MM-dd'),
+                                                  '$lte': self.to_date.date().toString('yyyy-MM-dd')})
+            records = list(db.attendance_records.find(query))
+            search = self.search.text().strip().lower()
+            records.sort(key=lambda r: (OFFICE_MAP.get(r.get('office_id'), {}).get('location', ''),
+                                       r.get('office_id', ''), r.get('work_date', '')))
+            for record in records:
+                employee = self.employees.get(str(record['employee_id']), {})
+                name = employee.get('full_name', 'Archived employee')
+                number = employee.get('employee_no', '')
+                if search and search not in (name + ' ' + number).lower():
+                    continue
+                office = OFFICE_MAP.get(record.get('office_id'), {})
+                values = [office.get('location', 'Unassigned'), office.get('name', 'Unassigned'), name, number,
+                          employee.get('job_title'), record.get('work_date'), local_time(record.get('clock_in_at')),
+                          local_time(record.get('clock_out_at')), record.get('minutes_worked'), record.get('status')]
+                self.add_row(self.attendance_table, values)
+            today = datetime.now(LAGOS).strftime('%Y-%m-%d')
+            active_ids = {e['_id'] for e in employees if e.get('status') == 'active'}
+            present_ids = set(db.attendance_records.distinct('employee_id', dict(self.query(), work_date=today,
+                                                                                 clock_in_at={'$ne': None})))
+            self.summary.setText(f'Active staff: {len(active_ids)}   |   Checked in today: {len(active_ids & present_ids)}'
+                                 f'   |   Not checked in: {len(active_ids - present_ids)}'
+                                 f'   |   Displayed records: {self.attendance_table.rowCount()}')
+        except Exception as exc:
+            self.employees = {}
+            self.emp_table.setRowCount(0)
+            self.attendance_table.setRowCount(0)
+            self.summary.setText('Could not load records. Check connection and refresh.')
+            QMessageBox.warning(self, 'Could not refresh', str(exc))
+
+    @staticmethod
+    def add_row(table, values, record_id=None):
+        row = table.rowCount()
+        table.insertRow(row)
+        for column, value in enumerate(values):
+            item = QTableWidgetItem('' if value is None else str(value))
+            if column == 0:
+                item.setData(Qt.UserRole, record_id)
+            table.setItem(row, column, item)
+
+    def selected_employee(self):
+        row = self.emp_table.currentRow()
+        if row < 0:
+            QMessageBox.information(self, 'Select employee', 'Select an employee first.')
+            return None
+        return self.employees.get(self.emp_table.item(row, 0).data(Qt.UserRole))
 
     def open_add_employee(self):
         from src.ui.add_employee import AddEmployeeDialog
         dialog = AddEmployeeDialog(self)
         if dialog.exec():
-            self.load_employees()
-            
-            
-            if hasattr(dialog, 'new_employee_id') and dialog.new_employee_id:
-                from PySide6.QtWidgets import QMessageBox
-                reply = QMessageBox.question(
-                    self, 'Enroll Fingerprint', 
-                    "Employee added! Do you want to enroll their fingerprint right now?",
-                    QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes
-                )
-                if reply == QMessageBox.Yes:
-                    self.open_enroll_fingerprint(dialog.new_employee_id)
-                    
+            self.refresh()
+
     def edit_employee(self):
-        from PySide6.QtWidgets import QMessageBox
         from src.ui.add_employee import AddEmployeeDialog
-        from src.data.database import DatabaseManager
-        from bson import ObjectId
-        
-        selected_items = self.emp_table.selectedItems()
-        if not selected_items:
-            QMessageBox.warning(self, "Select Employee", "Please select an employee to edit.")
+        employee = self.selected_employee()
+        if employee and AddEmployeeDialog(self, employee).exec():
+            self.refresh()
+
+    def enroll(self):
+        employee = self.selected_employee()
+        if employee:
+            from src.ui.enrollment import EnrollFingerprintDialog
+            EnrollFingerprintDialog(str(employee['_id']), self.scanner_provider, self).exec()
+            self.refresh()
+
+    def deactivate(self):
+        employee = self.selected_employee()
+        if not employee:
             return
-            
-        row = selected_items[0].row()
-        emp_id_str = self.emp_table.item(row, 0).data(Qt.UserRole)
-        
-        db = DatabaseManager.get_db()
-        emp = db.employees.find_one({"_id": ObjectId(emp_id_str)})
-        if emp:
-            dialog = AddEmployeeDialog(self, emp)
-            if dialog.exec():
-                self.load_employees()
-                    
-    def open_enroll_fingerprint(self, employee_id=None):
-        from PySide6.QtWidgets import QMessageBox
-        
-        
-        if not employee_id:
-            selected_items = self.emp_table.selectedItems()
-            if not selected_items:
-                QMessageBox.warning(self, "Select Employee", "Please select an employee from the table first.")
-                return
-            row = selected_items[0].row()
-            employee_id = self.emp_table.item(row, 0).data(Qt.UserRole)
-            
-        from src.ui.enrollment import EnrollFingerprintDialog
-        dialog = EnrollFingerprintDialog(employee_id, self.scanner_provider, self)
-        dialog.exec()
-        
-    def delete_employee(self):
-        from PySide6.QtWidgets import QMessageBox
-        selected_items = self.emp_table.selectedItems()
-        if not selected_items:
-            QMessageBox.warning(self, "Select Employee", "Please select an employee to delete.")
+        if QMessageBox.question(self, 'Deactivate employee', 'Prevent future check-ins? Attendance history will be retained.') != QMessageBox.Yes:
             return
-            
-        row = selected_items[0].row()
-        emp_id_str = self.emp_table.item(row, 0).data(Qt.UserRole)
-        emp_name = self.emp_table.item(row, 1).text()
-        
-        reply = QMessageBox.question(
-            self, "Confirm Delete", 
-            f"Are you sure you want to permanently delete {emp_name} and all of their attendance records? This cannot be undone.", 
-            QMessageBox.Yes | QMessageBox.No
-        )
-        
-        if reply == QMessageBox.Yes:
-            from bson import ObjectId
-            db = DatabaseManager.get_db()
+        try:
+            ClientDatabase.get_db().employees.update_one({'_id': employee['_id']}, {'$set': {'status': 'inactive'}})
+            self.refresh()
+        except ValueError as exc:
+            QMessageBox.warning(self, 'Could not deactivate', str(exc))
+
+    def export_reports(self):
+        path, _ = QFileDialog.getSaveFileName(self, 'Export sheet', 'Attendance.csv', 'CSV (*.csv)')
+        if not path:
+            return
+        try:
+            with open(path, 'w', newline='', encoding='utf-8-sig') as handle:
+                writer = csv.writer(handle)
+                table = self.attendance_table
+                writer.writerow([table.horizontalHeaderItem(c).text() for c in range(table.columnCount())])
+                for row in range(table.rowCount()):
+                    writer.writerow([csv_safe(table.item(row, col).text()) for col in range(table.columnCount())])
+            QMessageBox.information(self, 'Export complete', path)
+        except OSError as exc:
+            QMessageBox.warning(self, 'Export failed', str(exc))
+
+    def reset_office_password(self):
+        office = self.office_filter.currentData()
+        if not office:
+            QMessageBox.information(self, 'Choose office', 'Select one office in the office filter first.')
+            return
+        if QMessageBox.question(self, 'Reset office password', 'This will sign out all terminals for this office. Continue?') != QMessageBox.Yes:
+            return
+        try:
+            result = api.call(f'/offices/{office}/reset-password')
+            QMessageBox.information(self, 'Deliver privately', f"Username: {result['username']}\nTemporary password: {result['password']}\nShown once. Password change is required at next login.")
+        except ValueError as exc:
+            QMessageBox.warning(self, 'Reset failed', str(exc))
+
+    def change_password(self):
+        password, ok = QInputDialog.getText(self, 'Change password', 'At least 10 characters, letters, numbers and !@#$%&*?', QLineEdit.Password)
+        if ok:
             try:
-                obj_id = ObjectId(emp_id_str)
-                db.employees.delete_one({"_id": obj_id})
-                db.attendance_records.delete_many({"employee_id": obj_id})
-                
-                
-                db.users.delete_one({"employee_id": obj_id})
-                
-                QMessageBox.information(self, "Deleted", f"Employee {emp_name} deleted successfully.")
-                self.load_employees()
-            except Exception as e:
-                QMessageBox.critical(self, "Error", f"Failed to delete: {e}")
-            
-    def create_kpi_card(self, title, value, color_hex):
-        frame = QFrame()
-        frame.setStyleSheet(f"QFrame {{ background-color: {color_hex}; border-radius: 8px; border: 1px solid #ccc; }}")
-        layout = QVBoxLayout(frame)
-        
-        t_label = QLabel(title)
-        t_label.setAlignment(Qt.AlignCenter)
-        t_label.setFont(QFont("Arial", 11))
-        t_label.setStyleSheet("color: #555;")
-        
-        v_label = QLabel(value)
-        v_label.setAlignment(Qt.AlignCenter)
-        v_label.setFont(QFont("Arial", 24, QFont.Bold))
-        v_label.setStyleSheet("color: #222;")
-        
-        layout.addWidget(t_label)
-        layout.addWidget(v_label)
-        return frame, v_label
+                api.call('/password', {'password': password})
+                QMessageBox.information(self, 'Password updated', 'Your password was changed.')
+            except ValueError as exc:
+                QMessageBox.warning(self, 'Password not changed', str(exc))

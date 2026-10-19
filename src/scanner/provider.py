@@ -31,6 +31,9 @@ class KojackVendorProvider:
         
     def initialize(self) -> bool:
         from src.scanner.kojack import KojackScanner
+        if self.scanner:
+            self.scanner.close_device()
+        self._is_initialized = False
         self.scanner = KojackScanner()
         
         
@@ -64,7 +67,7 @@ class KojackVendorProvider:
         return None
         
     def close(self):
-        if self.scanner and self._is_initialized:
+        if self.scanner:
             self.scanner.close_device()
         self._is_initialized = False
 

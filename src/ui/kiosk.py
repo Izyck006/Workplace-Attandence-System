@@ -12,6 +12,9 @@ class KioskWidget(QWidget):
         super().__init__(parent)
         self.scanner_provider = scanner_provider
         self.worker = None
+        self.reconnect_timer = QTimer(self)
+        self.reconnect_timer.setSingleShot(True)
+        self.reconnect_timer.timeout.connect(self.reconnect_scanner)
         self.setup_ui()
 
     def setup_ui(self):
@@ -39,6 +42,9 @@ class KioskWidget(QWidget):
         top_layout.addWidget(title)
         top_layout.addStretch()
         top_layout.addWidget(admin_btn)
+        reconnect = QPushButton("Reconnect scanner")
+        reconnect.clicked.connect(self.reconnect_scanner)
+        top_layout.addWidget(reconnect)
         
         main_layout.addLayout(top_layout)
         
@@ -174,11 +180,17 @@ class KioskWidget(QWidget):
         self.stop_scanner()
 
     def start_scanner(self):
+        if not self.isVisible():
+            return
+        from src.client import api
+        if not api.token:
+            self.update_error("Session expired. Log in to this office again.")
+            return
         if self.worker is None or not self.worker.isRunning():
             
-            self.worker = ScannerWorker(self.scanner_provider.scanner, image_type=3)
+            self.worker = ScannerWorker(self.scanner_provider.scanner, image_type=None)
             self.worker.scan_status.connect(self.update_status)
-            self.worker.scan_error.connect(self.update_error)
+            self.worker.scan_error.connect(self.on_scanner_error)
             self.worker.preview_frame.connect(self.update_preview)
             self.worker.scan_complete.connect(self.process_scan)
             self.worker.start()
@@ -195,6 +207,9 @@ class KioskWidget(QWidget):
         self.preview_label.setPixmap(scaled)
 
     def stop_scanner(self):
+        self.reconnect_timer.stop()
+        if hasattr(self, 'countdown_timer'):
+            self.countdown_timer.stop()
         if self.worker and self.worker.isRunning():
             self.worker.stop()
             self.worker.wait() 
@@ -246,177 +261,44 @@ class KioskWidget(QWidget):
         self.start_scanner()
 
     def process_scan(self, template_data):
-        self.update_status("Fingerprint captured! Extracting minutiae...")
-        
-        if template_data.get("status") == "success":
-            image_bytes = template_data.get("image")
-            width = template_data.get("width")
-            height = template_data.get("height")
-            
+        self.stop_scanner()
+        try:
             from src.services.fingerprint import FingerprintMatcher
-            matcher = FingerprintMatcher()
-            probe_descriptors = matcher.extract_descriptors(image_bytes, width, height)
-            
-            if probe_descriptors is None:
-                self.update_error("Failed to read fingerprint. Try again.")
-                self.stop_scanner()
-                QTimer.singleShot(500, lambda: self.start_scanner())
-                return
-                
-            self.update_status("Searching database...")
-            
-            from src.data.database import DatabaseManager
-            import pickle
-            db = DatabaseManager.get_db()
-            
-            best_match = None
-            best_score = 0
-            second_best_score = 0
-            
-            for emp in db.employees.find({"has_fingerprint": True}):
-                if "fingerprint_descriptors" in emp:
-                    import zlib
-                    try:
-                        raw_bytes = zlib.decompress(emp["fingerprint_descriptors"])
-                    except Exception:
-                        raw_bytes = emp["fingerprint_descriptors"]
-                    
-                    db_desc_data = pickle.loads(raw_bytes)
-                    
-                    emp_best_score = 0
-                    
-                    if isinstance(db_desc_data, list):
-                        for db_desc in db_desc_data:
-                            score = matcher.get_match_score(probe_descriptors, db_desc)
-                            if score > emp_best_score:
-                                emp_best_score = score
-                    else:
-                        emp_best_score = matcher.get_match_score(probe_descriptors, db_desc_data)
-                    
-                    if emp_best_score > best_score:
-                        second_best_score = best_score
-                        best_score = emp_best_score
-                        best_match = emp
-                    elif emp_best_score > second_best_score:
-                        second_best_score = emp_best_score
-                        
-            is_valid_match = False
-            if best_match and best_score >= 25:
-                if second_best_score == 0 or (best_score - second_best_score) >= 6 or best_score >= 50:
-                    is_valid_match = True
+            from src.client import api
+            if template_data.get('status') != 'success':
+                raise ValueError('Scan failed. Please try again.')
+            sample = FingerprintMatcher().extract_descriptors(template_data['image'], template_data['width'], template_data['height'])
+            if sample is None:
+                raise ValueError('Could not read your fingerprint. Please scan again.')
+            self.update_status('Verifying with central server...')
+            result = api.call('/scan', {'samples': [sample.tolist()], 'action': 'in' if self.radio_in.isChecked() else 'out'})
+            employee = result['employee']
+            self.name_field.setText(f"{employee.get('first_name', '')} {employee.get('last_name', '')}")
+            self.id_field.setText(employee.get('employee_no', ''))
+            self.job_field.setText(employee.get('job_title', ''))
+            self.action_field.setText(result['action'])
+            self.status_label.setText(result['action'] + ' — confirmed by central server')
+            self.status_label.setStyleSheet('color: green; font-size: 20px;')
+            if employee.get('photo_bytes'):
+                pixmap = QPixmap()
+                pixmap.loadFromData(employee['photo_bytes'])
+                self.photo_label.setPixmap(pixmap.scaled(150, 150, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        except Exception as exc:
+            self.update_error(str(exc))
+        if self.isVisible():
+            self.start_countdown(4, self.reset_and_start)
 
-            print(f"Biometric scan result: Candidate={best_match.get('first_name') if best_match else 'None'} Score={best_score}, 2nd={second_best_score}, Valid={is_valid_match}")
-
-            if is_valid_match: 
-                self.stop_scanner()
-                
-                import datetime
-                now = datetime.datetime.now()
-                today_str = now.strftime("%Y-%m-%d")
-                
-                
-                record = db.attendance_records.find_one({
-                    "employee_id": best_match["_id"],
-                    "work_date": today_str
-                })
-                
-                is_time_in = self.radio_in.isChecked()
-                
-                action_text = ""
-                
-                if is_time_in:
-                    if record:
-                        action_text = "Already Timed In"
-                        self.action_field.setStyleSheet("font-size: 16px; padding: 5px; font-weight: bold; color: orange;")
-                    else:
-                        db.attendance_records.insert_one({
-                            "employee_id": best_match["_id"],
-                            "work_date": today_str,
-                            "clock_in_at": now,
-                            "clock_out_at": None,
-                            "status": "present",
-                            "day_type": "working",
-                            "source": "scanner",
-                            "is_edited": False,
-                            "created_at": now,
-                            "updated_at": now
-                        })
-                        action_text = "Time In Recorded"
-                        self.action_field.setStyleSheet("font-size: 16px; padding: 5px; font-weight: bold; color: green;")
-                else:
-                    if record:
-                        if not record.get("clock_out_at"):
-                            db.attendance_records.update_one(
-                                {"_id": record["_id"]},
-                                {"$set": {
-                                    "clock_out_at": now,
-                                    "updated_at": now
-                                }}
-                            )
-                            action_text = "Time Out Recorded"
-                            self.action_field.setStyleSheet("font-size: 16px; padding: 5px; font-weight: bold; color: blue;")
-                        else:
-                            action_text = "Already Timed Out"
-                            self.action_field.setStyleSheet("font-size: 16px; padding: 5px; font-weight: bold; color: orange;")
-                    else:
-                        action_text = "Error: Must Time In First!"
-                        self.action_field.setStyleSheet("font-size: 16px; padding: 5px; font-weight: bold; color: red;")
-                
-                self.status_label.setStyleSheet("color: green; font-size: 20px; font-weight: bold; margin: 10px 0;")
-                self.status_label.setText("Verification Successful!")
-                
-                first_name = best_match.get('first_name', '')
-                self.name_field.setText(f"{first_name} {best_match.get('last_name', '')}")
-                
-                # Play audio greeting using native Windows TTS
-                import threading
-                import subprocess
-                def _speak():
-                    try:
-                        if "Time In" in action_text:
-                            text = f"Welcome, {first_name}."
-                        elif "Time Out" in action_text:
-                            text = f"Goodbye, {first_name}. Have a great day!"
-                        elif "Already" in action_text:
-                            text = f"You are already clocked in, {first_name}."
-                        else:
-                            text = f"Hello, {first_name}."
-                            
-                        # Escape single quotes in name if any
-                        text = text.replace("'", "''")
-                        ps_cmd = f"Add-Type -AssemblyName System.Speech; $synth = New-Object System.Speech.Synthesis.SpeechSynthesizer; $synth.Speak('{text}')"
-                        subprocess.run(["powershell", "-Command", ps_cmd], creationflags=subprocess.CREATE_NO_WINDOW)
-                    except Exception as e:
-                        print("Audio error:", e)
-                threading.Thread(target=_speak, daemon=True).start()
-                self.id_field.setText(str(best_match.get('employee_id', '')))
-                self.job_field.setText(str(best_match.get('job_title', '')))
-                self.action_field.setText(f"{action_text} at {now.strftime('%I:%M %p')}")
-                
-                if best_match.get("photo_bytes"):
-                    pm = QPixmap()
-                    pm.loadFromData(best_match["photo_bytes"])
-                    self.photo_label.setPixmap(pm.scaled(150, 150, Qt.KeepAspectRatio, Qt.SmoothTransformation))
-                else:
-                    self.photo_label.setText("No Photo")
-                    self.photo_label.setPixmap(QPixmap())
-                
-                
-                self.start_countdown(3, self.reset_and_start)
-            else:
-                self.status_label.setStyleSheet("color: #E65100; font-size: 18px; font-weight: bold; margin: 10px 0;")
-                self.status_label.setText("Fingerprint not recognized. Please try again.")
-                self.name_field.clear()
-                self.id_field.clear()
-                self.job_field.clear()
-                self.action_field.clear()
-                self.photo_label.setText("No Photo")
-                self.photo_label.setPixmap(QPixmap())
-                self.stop_scanner()
-                
-                
-                self.start_countdown(3, self.start_scanner)
+    def reconnect_scanner(self):
+        if not self.isVisible():
+            return
+        self.stop_scanner()
+        self.scanner_provider.close()
+        if self.scanner_provider.initialize():
+            self.start_scanner()
         else:
-            self.update_error("Scan failed. Please try again.")
-            self.stop_scanner()
-            QTimer.singleShot(500, lambda: self.start_scanner())
+            self.update_error('Connect the scanner and install the Integrated Biometrics USB driver, then click Reconnect scanner.')
+            self.reconnect_timer.start(5000)
+
+    def on_scanner_error(self, message):
+        self.update_error(message)
+        self.reconnect_timer.start(5000)
