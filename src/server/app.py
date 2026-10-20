@@ -120,11 +120,11 @@ def current_user(credentials: HTTPAuthorizationCredentials = Depends(bearer), db
         raise HTTPException(403, "Invalid office assignment.")
     user["session_id"] = session["_id"]
     user["kiosk"] = session.get("kiosk", False)
-    # Sliding window: Admin console sessions expire after 2 minutes of inactivity
+    # Sliding window: Admin console sessions expire after 10 minutes of inactivity
     if not user["kiosk"]:
         db.sessions.update_one(
             {"_id": session["_id"]},
-            {"$set": {"expires_at": datetime.utcnow() + timedelta(minutes=2)}}
+            {"$set": {"expires_at": datetime.utcnow() + timedelta(minutes=10)}}
         )
     return user
 
@@ -429,6 +429,9 @@ def reset_password(office_id: str, user=Depends(master), db=Depends(get_db)):
 
 
 class DeleteAttendanceBody(BaseModel):
+    record_id: str | None = None
+    employee_id: str | None = None
+    work_date: str | None = None
     before_date: str | None = None
     from_date: str | None = None
     to_date: str | None = None
@@ -439,7 +442,20 @@ class DeleteAttendanceBody(BaseModel):
 @app.post("/attendance/delete")
 def delete_attendance(body: DeleteAttendanceBody, user=Depends(master), db=Depends(get_db)):
     query = {}
-    if body.delete_all:
+    if body.record_id:
+        if ObjectId.is_valid(body.record_id):
+            query["_id"] = {"$in": [ObjectId(body.record_id), str(body.record_id)]}
+        else:
+            query["_id"] = body.record_id
+    elif body.employee_id and body.work_date:
+        if not re.match(r"^\d{4}-\d{2}-\d{2}$", body.work_date):
+            raise HTTPException(400, "Invalid date format. Use YYYY-MM-DD.")
+        if ObjectId.is_valid(body.employee_id):
+            query["employee_id"] = {"$in": [ObjectId(body.employee_id), str(body.employee_id)]}
+        else:
+            query["employee_id"] = body.employee_id
+        query["work_date"] = body.work_date
+    elif body.delete_all:
         query = {}
     elif body.before_date:
         if not re.match(r"^\d{4}-\d{2}-\d{2}$", body.before_date):
@@ -450,7 +466,7 @@ def delete_attendance(body: DeleteAttendanceBody, user=Depends(master), db=Depen
             raise HTTPException(400, "Invalid date format. Use YYYY-MM-DD.")
         query["work_date"] = {"$gte": body.from_date, "$lte": body.to_date}
     else:
-        raise HTTPException(400, "Specify a date range, cutoff date, or delete_all flag.")
+        raise HTTPException(400, "Specify a record ID, staff log date, date range, or delete_all flag.")
 
     if body.office_id:
         if body.office_id not in OFFICE_MAP:

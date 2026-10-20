@@ -59,3 +59,56 @@ def test_legacy_conversion_preserves_templates_and_rejects_code():
     assert convert_templates(db) == (0, 0)
     with pytest.raises(ValueError):
         TemplateReader(io.BytesIO(b'cos\nsystem\n.')).load()
+
+
+def test_dashboard_session_timeout_and_deletion_controls(qtbot, monkeypatch):
+    from src.ui.dashboard import DashboardWidget, DeleteHistoryDialog
+    kano = ObjectId()
+    def call(path, body=None):
+        if body['collection'] == 'employees':
+            return [{'office_id': 'engineering-kano', '_id': kano, 'employee_no': 'K1', 'full_name': 'Kano Staff', 'status': 'active'}]
+        return [{'office_id': 'engineering-kano', 'employee_id': kano, 'work_date': '2026-10-19', 'clock_in_at': datetime(2026, 10, 19, 8)}]
+    monkeypatch.setattr(api, 'call', call)
+    monkeypatch.setattr(api, 'token', 'test-token')
+
+    dashboard = DashboardWidget()
+    qtbot.addWidget(dashboard)
+
+    # 1. Verify 10-minute session idle timeout (600,000 ms)
+    assert dashboard.inactivity_timer.interval() == 600_000
+
+    # 2. Master Admin controls
+    dashboard.set_user({'role': 'main_admin'})
+    dashboard.show()
+    assert dashboard.inactivity_timer.isActive()
+    assert dashboard.delete_history_btn.isVisible()
+    assert dashboard.delete_selected_btn.isVisible()
+    assert not dashboard.delete_selected_btn.isEnabled()
+
+    # Selecting row enables the sleek Delete Selected Log button
+    dashboard.attendance_table.selectRow(0)
+    assert dashboard.delete_selected_btn.isEnabled()
+
+    # Deselecting disables it
+    dashboard.attendance_table.clearSelection()
+    assert not dashboard.delete_selected_btn.isEnabled()
+
+    # 3. Office Admin cannot see deletion controls
+    dashboard.set_user({'role': 'office_admin', 'office_id': 'engineering-kano'})
+    assert not dashboard.delete_history_btn.isVisible()
+    assert not dashboard.delete_selected_btn.isVisible()
+
+    # 4. Verify DeleteHistoryDialog criteria and params
+    emps = {str(kano): {'_id': kano, 'employee_no': 'K1', 'full_name': 'Kano Staff', 'office_id': 'engineering-kano'}}
+    dialog = DeleteHistoryDialog(employees=emps)
+    qtbot.addWidget(dialog)
+
+    assert dialog.radio_staff.isChecked()
+    assert not dialog.delete_btn.isEnabled()
+    dialog.confirm_input.setText("DELETE")
+    assert dialog.delete_btn.isEnabled()
+
+    params = dialog.get_delete_params()
+    assert params.get('employee_id') == str(kano)
+    assert 'work_date' in params
+

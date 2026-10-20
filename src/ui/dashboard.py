@@ -101,8 +101,11 @@ class DeleteAttendanceWorker(QThread):
     finished_success = Signal(int)
     finished_error = Signal(str)
 
-    def __init__(self, before_date=None, from_date=None, to_date=None, office_id=None, delete_all=False):
+    def __init__(self, record_id=None, employee_id=None, work_date=None, before_date=None, from_date=None, to_date=None, office_id=None, delete_all=False):
         super().__init__()
+        self.record_id = record_id
+        self.employee_id = employee_id
+        self.work_date = work_date
         self.before_date = before_date
         self.from_date = from_date
         self.to_date = to_date
@@ -112,6 +115,9 @@ class DeleteAttendanceWorker(QThread):
     def run(self):
         try:
             res = api.delete_attendance(
+                record_id=self.record_id,
+                employee_id=self.employee_id,
+                work_date=self.work_date,
                 before_date=self.before_date,
                 from_date=self.from_date,
                 to_date=self.to_date,
@@ -124,46 +130,81 @@ class DeleteAttendanceWorker(QThread):
 
 
 class DeleteHistoryDialog(QDialog):
-    def __init__(self, parent=None):
+    def __init__(self, employees=None, parent=None):
+        if isinstance(employees, QWidget) and parent is None:
+            parent = employees
+            employees = None
         super().__init__(parent)
-        self.setWindowTitle("Delete Attendance History")
-        self.setFixedWidth(460)
+        self.employees = employees or {}
+        self.setWindowTitle("Batch Delete Attendance History")
+        self.setFixedWidth(520)
         layout = QVBoxLayout(self)
+        layout.setSpacing(12)
 
         title = QLabel("Delete Attendance History")
         title.setStyleSheet("font-size: 16px; font-weight: bold; color: #ff6b6b;")
         layout.addWidget(title)
 
-        desc = QLabel("Permanently remove old attendance records from the central database. This action is restricted to the master administrator.")
+        desc = QLabel("Permanently remove attendance records from the central database. Restricted to Master Administrator.")
         desc.setWordWrap(True)
-        desc.setStyleSheet("color: #bbb; font-size: 12px; margin-bottom: 8px;")
+        desc.setStyleSheet("color: #aaa; font-size: 12px; margin-bottom: 4px;")
         layout.addWidget(desc)
 
-        group = QGroupBox("Deletion Criteria")
+        group = QGroupBox("Deletion Target")
         g_layout = QVBoxLayout(group)
+        g_layout.setSpacing(10)
 
         self.btn_group = QButtonGroup(self)
-        self.radio_before = QRadioButton("Delete records on or before cutoff date:")
-        self.radio_range = QRadioButton("Delete records within date range:")
-        self.radio_all = QRadioButton("Delete ALL attendance records across all time")
+        self.radio_staff = QRadioButton("Particular staff log on a specific day")
+        self.radio_before = QRadioButton("Records on or before cutoff date")
+        self.radio_range = QRadioButton("Records within date range")
+        self.radio_all = QRadioButton("ALL attendance records across all time")
 
-        self.btn_group.addButton(self.radio_before, 1)
-        self.btn_group.addButton(self.radio_range, 2)
-        self.btn_group.addButton(self.radio_all, 3)
-        self.radio_before.setChecked(True)
+        self.btn_group.addButton(self.radio_staff, 1)
+        self.btn_group.addButton(self.radio_before, 2)
+        self.btn_group.addButton(self.radio_range, 3)
+        self.btn_group.addButton(self.radio_all, 4)
 
-        g_layout.addWidget(self.radio_before)
         today = QDate.currentDate()
+
+        # Specific staff option
+        g_layout.addWidget(self.radio_staff)
+        h_staff = QHBoxLayout()
+        h_staff.setContentsMargins(24, 0, 0, 4)
+        self.staff_combo = QComboBox()
+        self.staff_combo.setFixedWidth(250)
+        sorted_emps = sorted(self.employees.values(), key=lambda e: (e.get('office_id', ''), e.get('full_name', '')))
+        for emp in sorted_emps:
+            name = emp.get('full_name') or f"{emp.get('first_name', '')} {emp.get('last_name', '')}".strip()
+            office = emp.get('office_id', '')
+            emp_no = emp.get('employee_no', '')
+            label = f"{name} ({emp_no}) - {office}"
+            self.staff_combo.addItem(label, str(emp.get('_id', '')))
+        if not sorted_emps:
+            self.staff_combo.addItem("No staff records loaded", "")
+
+        self.staff_date_edit = QDateEdit(today)
+        self.staff_date_edit.setCalendarPopup(True)
+        self.staff_date_edit.setFixedWidth(120)
+        h_staff.addWidget(self.staff_combo)
+        h_staff.addWidget(QLabel("Date:"))
+        h_staff.addWidget(self.staff_date_edit)
+        h_staff.addStretch()
+        g_layout.addLayout(h_staff)
+
+        # Cutoff date option
+        g_layout.addWidget(self.radio_before)
         self.before_date_edit = QDateEdit(today.addDays(-30))
         self.before_date_edit.setCalendarPopup(True)
-        self.before_date_edit.setFixedWidth(140)
+        self.before_date_edit.setFixedWidth(130)
         h_before = QHBoxLayout()
-        h_before.setContentsMargins(20, 0, 0, 5)
+        h_before.setContentsMargins(24, 0, 0, 4)
         h_before.addWidget(QLabel("Cutoff Date:"))
         h_before.addWidget(self.before_date_edit)
         h_before.addStretch()
         g_layout.addLayout(h_before)
 
+        # Date range option
         g_layout.addWidget(self.radio_range)
         self.from_date_edit = QDateEdit(today.addDays(-60))
         self.from_date_edit.setCalendarPopup(True)
@@ -172,7 +213,7 @@ class DeleteHistoryDialog(QDialog):
         self.to_date_edit.setCalendarPopup(True)
         self.to_date_edit.setFixedWidth(120)
         h_range = QHBoxLayout()
-        h_range.setContentsMargins(20, 0, 0, 5)
+        h_range.setContentsMargins(24, 0, 0, 4)
         h_range.addWidget(QLabel("From:"))
         h_range.addWidget(self.from_date_edit)
         h_range.addWidget(QLabel("To:"))
@@ -180,11 +221,19 @@ class DeleteHistoryDialog(QDialog):
         h_range.addStretch()
         g_layout.addLayout(h_range)
 
+        # Delete all option
         g_layout.addWidget(self.radio_all)
         layout.addWidget(group)
 
+        self.radio_staff.setChecked(True)
+        self.radio_staff.toggled.connect(self._update_radio_states)
+        self.radio_before.toggled.connect(self._update_radio_states)
+        self.radio_range.toggled.connect(self._update_radio_states)
+        self.radio_all.toggled.connect(self._update_radio_states)
+        self._update_radio_states()
+
         h_office = QHBoxLayout()
-        h_office.addWidget(QLabel("Target Office:"))
+        h_office.addWidget(QLabel("Target Office Filter:"))
         self.office_combo = QComboBox()
         self.office_combo.addItem("All Offices (Entire Company)", "")
         for o in OFFICES:
@@ -192,40 +241,49 @@ class DeleteHistoryDialog(QDialog):
         h_office.addWidget(self.office_combo)
         layout.addLayout(h_office)
 
-        layout.addSpacing(10)
-        confirm_label = QLabel("Type DELETE to confirm:")
-        confirm_label.setStyleSheet("font-weight: bold; color: #ff8888;")
-        layout.addWidget(confirm_label)
+        confirm_box = QVBoxLayout()
+        confirm_label = QLabel("Type DELETE to confirm permanent deletion:")
+        confirm_label.setStyleSheet("font-weight: bold; color: #ff8888; font-size: 12px;")
+        confirm_box.addWidget(confirm_label)
 
         self.confirm_input = QLineEdit()
         self.confirm_input.setPlaceholderText("DELETE")
-        layout.addWidget(self.confirm_input)
+        self.confirm_input.setStyleSheet("padding: 6px; font-weight: bold; font-size: 13px;")
+        confirm_box.addWidget(self.confirm_input)
+        layout.addLayout(confirm_box)
 
-        layout.addSpacing(15)
         btn_layout = QHBoxLayout()
         btn_layout.addStretch()
 
         self.cancel_btn = QPushButton("Cancel")
+        self.cancel_btn.setFixedHeight(34)
         self.cancel_btn.clicked.connect(self.reject)
         btn_layout.addWidget(self.cancel_btn)
 
         self.delete_btn = QPushButton("Permanently Delete")
+        self.delete_btn.setFixedHeight(34)
         self.delete_btn.setStyleSheet("""
             QPushButton {
-                background-color: #8b0000;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #8a1d29, stop:1 #ad2637);
                 color: #ffffff;
-                border: 1px solid #b22222;
-                border-radius: 4px;
-                padding: 6px 14px;
+                border: 1px solid #c93b50;
+                border-radius: 5px;
+                padding: 0 20px;
                 font-weight: bold;
+                font-size: 13px;
             }
             QPushButton:hover {
-                background-color: #a00000;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #a82333, stop:1 #c72b41);
+                border: 1px solid #ff576f;
+            }
+            QPushButton:pressed {
+                background-color: #63121d;
+                border: 1px solid #d9384e;
             }
             QPushButton:disabled {
-                background-color: #442222;
-                color: #888;
-                border-color: #553333;
+                background-color: #2b1d20;
+                color: #6b5256;
+                border-color: #3d282c;
             }
         """)
         self.delete_btn.setEnabled(False)
@@ -234,21 +292,42 @@ class DeleteHistoryDialog(QDialog):
         layout.addLayout(btn_layout)
 
         self.confirm_input.textChanged.connect(self._check_confirm)
+        self.staff_combo.currentIndexChanged.connect(lambda: self._check_confirm(self.confirm_input.text()))
+
+    def _update_radio_states(self):
+        staff_active = self.radio_staff.isChecked()
+        self.staff_combo.setEnabled(staff_active)
+        self.staff_date_edit.setEnabled(staff_active)
+
+        before_active = self.radio_before.isChecked()
+        self.before_date_edit.setEnabled(before_active)
+
+        range_active = self.radio_range.isChecked()
+        self.from_date_edit.setEnabled(range_active)
+        if hasattr(self, 'confirm_input'):
+            self._check_confirm(self.confirm_input.text())
 
     def _check_confirm(self, text):
-        self.delete_btn.setEnabled(text.strip() == "DELETE")
+        confirmed = text.strip() == "DELETE"
+        if self.radio_staff.isChecked() and not self.staff_combo.currentData():
+            confirmed = False
+        self.delete_btn.setEnabled(confirmed)
 
     def get_delete_params(self):
         office_id = self.office_combo.currentData() or None
-        if self.radio_all.isChecked():
-            return None, None, None, office_id, True
+        if self.radio_staff.isChecked():
+            emp_id = self.staff_combo.currentData() or None
+            work_date = self.staff_date_edit.date().toString("yyyy-MM-dd")
+            return {"employee_id": emp_id, "work_date": work_date, "office_id": office_id}
+        elif self.radio_all.isChecked():
+            return {"delete_all": True, "office_id": office_id}
         elif self.radio_before.isChecked():
             before_str = self.before_date_edit.date().toString("yyyy-MM-dd")
-            return before_str, None, None, office_id, False
+            return {"before_date": before_str, "office_id": office_id}
         else:
             from_str = self.from_date_edit.date().toString("yyyy-MM-dd")
             to_str = self.to_date_edit.date().toString("yyyy-MM-dd")
-            return None, from_str, to_str, office_id, False
+            return {"from_date": from_str, "to_date": to_str, "office_id": office_id}
 
 
 class DashboardWidget(QWidget):
@@ -262,7 +341,7 @@ class DashboardWidget(QWidget):
         self.employees = {}
         self.loader = None
         self.inactivity_timer = QTimer(self)
-        self.inactivity_timer.setInterval(120_000)  # 2 minutes of inactivity auto-lock
+        self.inactivity_timer.setInterval(600_000)  # 10 minutes of inactivity auto-lock
         self.inactivity_timer.timeout.connect(self.on_inactivity_timeout)
         layout = QVBoxLayout(self)
 
@@ -326,6 +405,38 @@ class DashboardWidget(QWidget):
         export = QPushButton('Export CSV')
         export.clicked.connect(self.export_reports)
         filters.addWidget(export)
+
+        self.delete_selected_btn = QPushButton('Delete Selected Log')
+        self.delete_selected_btn.setToolTip('Permanently delete the selected attendance entry (Master Admin only)')
+        self.delete_selected_btn.setStyleSheet("""
+            QPushButton {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #3d141b, stop:0.5 #541b25, stop:1 #3d141b);
+                color: #ff99a8;
+                border: 1px solid #7c2431;
+                border-radius: 5px;
+                font-size: 12px;
+                font-weight: 600;
+                padding: 5px 14px;
+            }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #5e1c28, stop:0.5 #7a2233, stop:1 #5e1c28);
+                color: #ffffff;
+                border: 1px solid #ff4d6d;
+            }
+            QPushButton:pressed {
+                background-color: #240c11;
+                border: 1px solid #c92a43;
+            }
+            QPushButton:disabled {
+                background: #1e191b;
+                color: #554448;
+                border: 1px solid #2d2225;
+            }
+        """)
+        self.delete_selected_btn.setEnabled(False)
+        self.delete_selected_btn.setVisible(False)
+        self.delete_selected_btn.clicked.connect(self.delete_selected_log)
+        filters.addWidget(self.delete_selected_btn)
         layout.addLayout(filters)
 
         self.tabs = QTabWidget()
@@ -333,6 +444,7 @@ class DashboardWidget(QWidget):
 
         self.attendance_table = self.table(['Location', 'Office', 'Name', 'Employee ID',
                                            'Job Title', 'Date', 'Time In', 'Time Out', 'Minutes', 'Status'])
+        self.attendance_table.itemSelectionChanged.connect(self.on_attendance_selection_changed)
         self.tabs.addTab(self.attendance_table, 'Attendance sheet')
 
         employees = QWidget()
@@ -363,23 +475,61 @@ class DashboardWidget(QWidget):
         self.tabs.addTab(employees, 'Manage employees')
 
         master_actions = QHBoxLayout()
-        self.reset_button = QPushButton('Reset selected office login password')
+        master_actions.setContentsMargins(0, 10, 0, 4)
+        master_actions.setSpacing(12)
+        master_actions.addStretch()
+
+        self.reset_button = QPushButton('Reset Office Password')
+        self.reset_button.setFixedHeight(34)
+        self.reset_button.setStyleSheet("""
+            QPushButton {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #1e293b, stop:1 #0f172a);
+                color: #94a3b8;
+                border: 1px solid #334155;
+                border-radius: 6px;
+                font-size: 12px;
+                font-weight: 600;
+                padding: 0 16px;
+            }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #334155, stop:1 #1e293b);
+                color: #e2e8f0;
+                border: 1px solid #64748b;
+            }
+            QPushButton:pressed {
+                background-color: #0b1120;
+                border-color: #475569;
+            }
+        """)
         self.reset_button.clicked.connect(self.reset_office_password)
         master_actions.addWidget(self.reset_button)
 
-        self.delete_history_btn = QPushButton('Delete attendance history')
+        self.delete_history_btn = QPushButton('Batch Delete History...')
+        self.delete_history_btn.setFixedHeight(34)
         self.delete_history_btn.setStyleSheet("""
             QPushButton {
-                background-color: #5c2025;
-                color: #ffffff;
-                border: 1px solid #7a2b32;
-                border-radius: 4px;
-                font-size: 13px;
-                font-weight: 500;
-                padding: 5px 12px;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #2b1116, stop:0.5 #3d141e, stop:1 #2b1116);
+                color: #ff99a8;
+                border: 1px solid #6b1f2b;
+                border-radius: 6px;
+                font-size: 12px;
+                font-weight: 600;
+                padding: 0 18px;
+                letter-spacing: 0.3px;
             }
             QPushButton:hover {
-                background-color: #72282e;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #421620, stop:0.5 #5e1c2b, stop:1 #421620);
+                color: #ffffff;
+                border: 1px solid #ff4d6d;
+            }
+            QPushButton:pressed {
+                background-color: #1a080c;
+                border: 1px solid #a82338;
+            }
+            QPushButton:disabled {
+                background: #181214;
+                color: #554448;
+                border-color: #2b1c20;
             }
         """)
         self.delete_history_btn.clicked.connect(self.open_delete_history_dialog)
@@ -403,12 +553,14 @@ class DashboardWidget(QWidget):
 
     def set_user(self, user):
         self.user = user
-        self.inactivity_timer.start(120_000)
+        self.inactivity_timer.start(600_000)
         master = user['role'] == 'main_admin'
         self.title.setText('Master Admin (All Offices)' if master else OFFICE_MAP[user['office_id']]['name'])
         self.kiosk_button.setVisible(not master)
         self.reset_button.setVisible(master)
         self.delete_history_btn.setVisible(master)
+        self.delete_selected_btn.setVisible(master)
+        self.delete_selected_btn.setEnabled(False)
         self.location_filter.setEnabled(master)
         self.office_filter.setEnabled(master)
         self.location_filter.blockSignals(True)
@@ -424,17 +576,18 @@ class DashboardWidget(QWidget):
         self.user = None
         self.employees = {}
         self.cached_records = []
+        self.delete_selected_btn.setEnabled(False)
         self.emp_table.setRowCount(0)
         self.attendance_table.setRowCount(0)
 
     def reset_inactivity_timer(self):
         if self.user:
-            self.inactivity_timer.start(120_000)
+            self.inactivity_timer.start(600_000)
 
     def on_inactivity_timeout(self):
         self.inactivity_timer.stop()
         if self.user:
-            QMessageBox.warning(self, 'Session Expired', 'Your admin session has expired after 2 minutes of inactivity for security.')
+            QMessageBox.warning(self, 'Session Expired', 'Your admin session has expired after 10 minutes of inactivity for security.')
             self.logout_requested.emit()
 
     def mousePressEvent(self, event):
@@ -523,7 +676,8 @@ class DashboardWidget(QWidget):
             values = [office.get('location', 'Unassigned'), office.get('name', 'Unassigned'), name, number,
                       employee.get('job_title'), record.get('work_date'), local_time(record.get('clock_in_at')),
                       local_time(record.get('clock_out_at')), record.get('minutes_worked'), record.get('status')]
-            self.add_row(self.attendance_table, values)
+            rec_id = str(record.get('_id', ''))
+            self.add_row(self.attendance_table, values, record_id=rec_id)
 
     def apply_search_filter(self):
         if hasattr(self, 'cached_records'):
@@ -661,37 +815,84 @@ class DashboardWidget(QWidget):
         self.summary.setText('Password change failed.')
         QMessageBox.warning(self, 'Password not changed', error_msg)
 
+    def on_attendance_selection_changed(self):
+        is_master = bool(self.user and self.user.get('role') == 'main_admin')
+        has_sel = bool(self.attendance_table.selectionModel() and self.attendance_table.selectionModel().hasSelection())
+        self.delete_selected_btn.setEnabled(is_master and has_sel)
+
+    def delete_selected_log(self):
+        if not self.user or self.user.get('role') != 'main_admin':
+            return
+        row = self.attendance_table.currentRow()
+        if row < 0:
+            QMessageBox.information(self, 'Select Log', 'Select an attendance record from the table first.')
+            return
+
+        item0 = self.attendance_table.item(row, 0)
+        record_id = item0.data(Qt.UserRole) if item0 else None
+        location = self.attendance_table.item(row, 0).text() if self.attendance_table.item(row, 0) else ''
+        office = self.attendance_table.item(row, 1).text() if self.attendance_table.item(row, 1) else ''
+        staff_name = self.attendance_table.item(row, 2).text() if self.attendance_table.item(row, 2) else ''
+        emp_no = self.attendance_table.item(row, 3).text() if self.attendance_table.item(row, 3) else ''
+        work_date = self.attendance_table.item(row, 5).text() if self.attendance_table.item(row, 5) else ''
+        time_in = self.attendance_table.item(row, 6).text() if self.attendance_table.item(row, 6) else ''
+
+        msg = (f"Are you sure you want to permanently delete this attendance record?\n\n"
+               f"• Staff: {staff_name} ({emp_no})\n"
+               f"• Office: {office} ({location})\n"
+               f"• Date: {work_date}\n"
+               f"• Time In: {time_in or 'N/A'}\n\n"
+               f"This action is immediate and cannot be undone.")
+
+        if QMessageBox.question(self, 'Confirm Deletion', msg, QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+            return
+
+        self.reset_inactivity_timer()
+        self.delete_selected_btn.setEnabled(False)
+        self.summary.setText(f"Deleting record for {staff_name} on {work_date}...")
+
+        emp_id = None
+        for eid, edata in self.employees.items():
+            if edata.get('employee_no') == emp_no or edata.get('full_name') == staff_name:
+                emp_id = eid
+                break
+
+        self.del_worker = DeleteAttendanceWorker(
+            record_id=record_id,
+            employee_id=emp_id if not record_id else None,
+            work_date=work_date if not record_id else None
+        )
+        self.del_worker.finished_success.connect(self.on_delete_history_success)
+        self.del_worker.finished_error.connect(self.on_delete_history_error)
+        self.del_worker.start()
+
     def open_delete_history_dialog(self):
         if not self.user or self.user.get('role') != 'main_admin':
             return
         self.reset_inactivity_timer()
-        dialog = DeleteHistoryDialog(self)
+        dialog = DeleteHistoryDialog(employees=self.employees, parent=self)
         if dialog.exec():
-            before_date, from_date, to_date, office_id, delete_all = dialog.get_delete_params()
+            params = dialog.get_delete_params()
             self.delete_history_btn.setEnabled(False)
-            self.delete_history_btn.setText("Deleting records...")
+            self.delete_history_btn.setText("Deleting...")
             self.summary.setText("Deleting attendance history...")
-            self.del_worker = DeleteAttendanceWorker(
-                before_date=before_date,
-                from_date=from_date,
-                to_date=to_date,
-                office_id=office_id,
-                delete_all=delete_all
-            )
+            self.del_worker = DeleteAttendanceWorker(**params)
             self.del_worker.finished_success.connect(self.on_delete_history_success)
             self.del_worker.finished_error.connect(self.on_delete_history_error)
             self.del_worker.start()
 
     def on_delete_history_success(self, count):
         self.delete_history_btn.setEnabled(True)
-        self.delete_history_btn.setText("Delete attendance history")
-        self.summary.setText(f"Deleted {count} records.")
-        QMessageBox.information(self, "Success", f"Successfully deleted {count} attendance records.")
+        self.delete_history_btn.setText("Batch Delete History...")
+        self.on_attendance_selection_changed()
+        self.summary.setText(f"Deleted {count} record(s).")
+        QMessageBox.information(self, "Success", f"Successfully deleted {count} attendance record(s).")
         self.refresh()
 
     def on_delete_history_error(self, err_msg):
         self.delete_history_btn.setEnabled(True)
-        self.delete_history_btn.setText("Delete attendance history")
+        self.delete_history_btn.setText("Batch Delete History...")
+        self.on_attendance_selection_changed()
         self.summary.setText("Attendance deletion failed.")
         QMessageBox.critical(self, "Deletion Failed", err_msg)
 

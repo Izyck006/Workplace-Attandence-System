@@ -180,19 +180,29 @@ def test_attendance_deletion_authorization_and_audit(system):
     # 2. Unauthenticated request rejected (401/403)
     assert client.post('/attendance/delete', json={'delete_all': True}).status_code in (401, 403)
 
-    # 3. Master admin can delete before cutoff date
+    # 3. Master admin can delete a specific staff's log on a specific date
     master_headers = auth(client, 'master')
-    res = client.post('/attendance/delete', headers=master_headers, json={'before_date': '2026-03-01'})
+    res = client.post('/attendance/delete', headers=master_headers, json={
+        'employee_id': str(kano['_id']),
+        'work_date': '2026-01-01'
+    })
     assert res.status_code == 200
     assert res.json()['deleted_count'] == 1
     assert db.attendance_records.count_documents({}) == 2
 
-    # 4. Master admin can delete all remaining
+    # 4. Master admin can delete a single record by record_id
+    rec = db.attendance_records.find_one({'employee_id': kano['_id']})
+    res = client.post('/attendance/delete', headers=master_headers, json={'record_id': str(rec['_id'])})
+    assert res.status_code == 200
+    assert res.json()['deleted_count'] == 1
+    assert db.attendance_records.count_documents({}) == 1
+
+    # 5. Master admin can delete all remaining
     res = client.post('/attendance/delete', headers=master_headers, json={'delete_all': True})
     assert res.status_code == 200
-    assert res.json()['deleted_count'] == 2
+    assert res.json()['deleted_count'] == 1
     assert db.attendance_records.count_documents({}) == 0
 
-    # 5. Check audit trail
-    assert db.audit_events.count_documents({'action': 'attendance_deleted'}) == 2
+    # 6. Check audit trail
+    assert db.audit_events.count_documents({'action': 'attendance_deleted'}) == 3
 
