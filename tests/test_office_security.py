@@ -162,3 +162,37 @@ def test_generated_passwords_are_ten_characters():
         assert any(c.isalpha() for c in password)
         assert any(c.isdigit() for c in password)
         assert any(not c.isalnum() for c in password)
+
+
+def test_attendance_deletion_authorization_and_audit(system):
+    client, db, kano, abuja = system
+    # Insert attendance records
+    db.attendance_records.insert_many([
+        {'employee_id': kano['_id'], 'office_id': 'engineering-kano', 'work_date': '2026-01-01'},
+        {'employee_id': kano['_id'], 'office_id': 'engineering-kano', 'work_date': '2026-05-01'},
+        {'employee_id': abuja['_id'], 'office_id': 'logistics-abuja', 'work_date': '2026-05-01'},
+    ])
+
+    # 1. Office admin CANNOT delete attendance (403)
+    kano_headers = auth(client, 'kano')
+    assert client.post('/attendance/delete', headers=kano_headers, json={'delete_all': True}).status_code == 403
+
+    # 2. Unauthenticated request rejected (401/403)
+    assert client.post('/attendance/delete', json={'delete_all': True}).status_code in (401, 403)
+
+    # 3. Master admin can delete before cutoff date
+    master_headers = auth(client, 'master')
+    res = client.post('/attendance/delete', headers=master_headers, json={'before_date': '2026-03-01'})
+    assert res.status_code == 200
+    assert res.json()['deleted_count'] == 1
+    assert db.attendance_records.count_documents({}) == 2
+
+    # 4. Master admin can delete all remaining
+    res = client.post('/attendance/delete', headers=master_headers, json={'delete_all': True})
+    assert res.status_code == 200
+    assert res.json()['deleted_count'] == 2
+    assert db.attendance_records.count_documents({}) == 0
+
+    # 5. Check audit trail
+    assert db.audit_events.count_documents({'action': 'attendance_deleted'}) == 2
+

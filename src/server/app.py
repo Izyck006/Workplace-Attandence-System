@@ -65,7 +65,7 @@ async def security_and_rate_limit(request: Request, call_next):
         client_ip = rate_limiter.get_client_ip(request)
         if path == "/login":
             allowed, retry = rate_limiter.check(f"login:{client_ip}", max_requests=15, window_seconds=60)
-        elif path == "/password" or (path.startswith("/offices/") and path.endswith("/reset-password")):
+        elif path == "/password" or (path.startswith("/offices/") and path.endswith("/reset-password")) or path == "/attendance/delete":
             allowed, retry = rate_limiter.check(f"pw:{client_ip}", max_requests=10, window_seconds=60)
         elif path == "/scan":
             allowed, retry = rate_limiter.check(f"scan:{client_ip}", max_requests=60, window_seconds=60)
@@ -426,6 +426,41 @@ def reset_password(office_id: str, user=Depends(master), db=Depends(get_db)):
     db.sessions.delete_many({"user_id": account["_id"]})
     audit(db, user, "office_password_reset", office_id)
     return {"username": account["username"], "password": password}
+
+
+class DeleteAttendanceBody(BaseModel):
+    before_date: str | None = None
+    from_date: str | None = None
+    to_date: str | None = None
+    office_id: str | None = None
+    delete_all: bool = False
+
+
+@app.post("/attendance/delete")
+def delete_attendance(body: DeleteAttendanceBody, user=Depends(master), db=Depends(get_db)):
+    query = {}
+    if body.delete_all:
+        query = {}
+    elif body.before_date:
+        if not re.match(r"^\d{4}-\d{2}-\d{2}$", body.before_date):
+            raise HTTPException(400, "Invalid date format. Use YYYY-MM-DD.")
+        query["work_date"] = {"$lte": body.before_date}
+    elif body.from_date and body.to_date:
+        if not (re.match(r"^\d{4}-\d{2}-\d{2}$", body.from_date) and re.match(r"^\d{4}-\d{2}-\d{2}$", body.to_date)):
+            raise HTTPException(400, "Invalid date format. Use YYYY-MM-DD.")
+        query["work_date"] = {"$gte": body.from_date, "$lte": body.to_date}
+    else:
+        raise HTTPException(400, "Specify a date range, cutoff date, or delete_all flag.")
+
+    if body.office_id:
+        if body.office_id not in OFFICE_MAP:
+            raise HTTPException(400, "Invalid office ID.")
+        query["office_id"] = body.office_id
+
+    result = db.attendance_records.delete_many(query)
+    audit(db, user, "attendance_deleted", f"deleted_{result.deleted_count}_records")
+    return {"ok": True, "deleted_count": result.deleted_count}
+
 
 
 @app.post("/webhooks/paystack")

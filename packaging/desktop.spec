@@ -9,7 +9,7 @@ if not (sdk / 'IBScanUltimate.dll').exists():
 binaries = [(str(sdk / name), 'scanner_runtime') for name in
             ('IBScanUltimate.dll', 'ACamSDK.dll', 'IBScanNFIQ2.dll')]
 a = Analysis([str(root / 'main.py')], pathex=[str(root)], binaries=binaries,
-    datas=[(str(root / 'icon.ico'), '.'), (str(root / 'randaframes logo.jpg'), '.')],
+    datas=[(str(root / 'icon.ico'), '.'), (str(root / 'randaframes logo.jpg'), '.'), (str(root / 'assets'), 'assets')],
     hiddenimports=[], excludes=['fastapi', 'uvicorn', 'mongomock', 'pytest', 'src.server', 'src.data.database'])
 pyz = PYZ(a.pure)
 exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name='RandaframesAttendance',

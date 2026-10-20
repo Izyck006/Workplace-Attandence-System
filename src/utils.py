@@ -70,12 +70,12 @@ def speak(text: str):
             phrase_key = "welcome_system.mp3"
         elif "goodbye" in lower:
             phrase_key = "goodbye.mp3"
-        elif "welcome" in lower:
-            phrase_key = "welcome_user.mp3"
-        elif "already clocked" in lower:
+        elif "already" in lower:
             phrase_key = "already_clocked.mp3"
-        elif "not recognized" in lower:
+        elif "not recognized" in lower or "scan again" in lower or "fingerprint" in lower:
             phrase_key = "scan_error.mp3"
+        elif "welcome" in lower or "hello" in lower:
+            phrase_key = "welcome_user.mp3"
 
         if phrase_key:
             asset_audio = get_asset_path(os.path.join("assets", "audio", phrase_key))

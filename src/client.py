@@ -107,6 +107,17 @@ class ApiClient:
             self.saved_token = self.saved_user = None
             self.save_config()
 
+    def delete_attendance(self, before_date=None, from_date=None, to_date=None, office_id=None, delete_all=False):
+        payload = {
+            "before_date": before_date,
+            "from_date": from_date,
+            "to_date": to_date,
+            "office_id": office_id,
+            "delete_all": delete_all
+        }
+        return self.call("/attendance/delete", payload)
+
+
 
 api = ApiClient()
 
