@@ -25,28 +25,49 @@ WizardStyle=modern
 
 [Files]
 Source: "..\dist\RandaframesAttendance\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "vendor\IBScanDriver Setup.msi"; Flags: dontcopy
+Source: "vendor\IBScanDriver Setup.msi"; DestDir: "{app}\drivers"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\Randaframes Attendance"; Filename: "{app}\RandaframesAttendance.exe"
+Name: "{group}\Install Scanner Driver"; Filename: "{sys}\msiexec.exe"; Parameters: "/i ""{app}\drivers\IBScanDriver Setup.msi"""
 Name: "{autodesktop}\Randaframes Attendance"; Filename: "{app}\RandaframesAttendance.exe"
 
 [Run]
 Filename: "{app}\RandaframesAttendance.exe"; Description: "Open Randaframes Attendance"; Flags: nowait postinstall skipifsilent runasoriginaluser
 
 [Code]
-function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  RestartNeeded: Boolean;
+
+procedure CurStepChanged(CurStep: TSetupStep);
 var
   ResultCode: Integer;
+  DriverPath: String;
 begin
-  Result := '';
-  ExtractTemporaryFile('IBScanDriver Setup.msi');
-  if not Exec(ExpandConstant('{sys}\msiexec.exe'),
-    '/i "' + ExpandConstant('{tmp}\IBScanDriver Setup.msi') + '" /passive /norestart',
-    '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
-    Result := 'Could not start the scanner driver installer. Check administrator rights and retry.'
-  else if ResultCode = 3010 then
-    NeedsRestart := True
-  else if (ResultCode <> 0) and (ResultCode <> 1638) then
-    Result := 'Scanner driver installation failed (code ' + IntToStr(ResultCode) + '). Resolve this before installing the attendance app.';
+  if CurStep = ssPostInstall then
+  begin
+    DriverPath := ExpandConstant('{app}\drivers\IBScanDriver Setup.msi');
+    if FileExists(DriverPath) then
+    begin
+      if Exec(ExpandConstant('{sys}\msiexec.exe'),
+        '/i "' + DriverPath + '" /passive /norestart',
+        '', SW_SHOWNORMAL, ewWaitUntilTerminated, ResultCode) then
+      begin
+        if ResultCode = 3010 then
+          RestartNeeded := True
+        else if (ResultCode <> 0) and (ResultCode <> 1638) then
+        begin
+          MsgBox('Scanner driver setup returned status ' + IntToStr(ResultCode) + ' (the driver may already be installed).'#13#10 +
+            'Randaframes Attendance has installed successfully.'#13#10#13#10 +
+            'If your scanner is not detected, you can run the driver installer manually anytime from:'#13#10 +
+            DriverPath, mbInformation, MB_OK);
+        end;
+      end;
+    end;
+  end;
+end;
+
+function NeedRestart(): Boolean;
+begin
+  Result := RestartNeeded;
 end;
