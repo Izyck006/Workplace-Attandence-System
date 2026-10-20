@@ -59,7 +59,6 @@ def login(db, username, password):
         update["password_hash"] = ph.hash(password)
     db.users.update_one({"_id": user["_id"]}, {"$set": update})
     token = secrets.token_urlsafe(32)
-    # Admin console session expires in 10 minutes of idle time
     db.sessions.insert_one({"_id": token_hash(token), "user_id": user["_id"], "kiosk": False,
                             "expires_at": now + timedelta(minutes=10)})
     return token, {k: user[k] for k in ("_id", "username", "role", "office_id", "must_change_password") if k in user}

@@ -286,7 +286,6 @@ class KioskWidget(QWidget):
             self.update_status('Verifying with central server...')
             action = 'in' if self.radio_in.isChecked() else 'out'
 
-            # Run network call in background thread to avoid freezing Qt UI
             self.scan_worker = ScanWorker(sample, action)
             self.scan_worker.scan_success.connect(self.on_scan_success)
             self.scan_worker.scan_error.connect(self.on_scan_error)
@@ -318,7 +317,6 @@ class KioskWidget(QWidget):
             self.photo_label.setText("No Photo")
             self.photo_label.setPixmap(QPixmap())
 
-        # Audio greeting
         if 'Time In' in action:
             speak(f"Welcome, {first_name}.")
         elif 'Time Out' in action:

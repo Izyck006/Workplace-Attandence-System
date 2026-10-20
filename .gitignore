@@ -37,6 +37,7 @@ scanner_runtime/
 installer/vendor/
 tools/
 pytest-cache-files-*/
-.pytest_cache/
 captures/
+.gradle/
+**/build/
 !packaging/desktop.spec

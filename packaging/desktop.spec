@@ -13,5 +13,5 @@ a = Analysis([str(root / 'main.py')], pathex=[str(root)], binaries=binaries,
     hiddenimports=[], excludes=['fastapi', 'uvicorn', 'mongomock', 'pytest', 'src.server', 'src.data.database'])
 pyz = PYZ(a.pure)
 exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name='RandaframesAttendance',
-    console=False, icon=str(root / 'icon.ico'), upx=False)
+    console=False, icon=str(root / 'icon.ico'), version=str(root / 'packaging' / 'version_info.txt'), upx=False)
 coll = COLLECT(exe, a.binaries, a.datas, name='RandaframesAttendance', upx=False)

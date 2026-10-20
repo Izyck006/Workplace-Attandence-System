@@ -13,7 +13,6 @@ class RateLimiter:
         self._last_cleanup = time.time()
 
     def get_client_ip(self, request: Request) -> str:
-        # Check standard reverse-proxy headers (Render / Cloudflare / AWS)
         forwarded = request.headers.get("x-forwarded-for")
         if forwarded:
             return forwarded.split(",")[0].strip()
@@ -26,7 +25,6 @@ class RateLimiter:
         now = time.time()
         cutoff = now - window_seconds
         with self._lock:
-            # Periodic cleanup every 5 minutes
             if now - self._last_cleanup > 300:
                 self._cleanup_locked(now)
 

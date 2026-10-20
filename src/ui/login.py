@@ -75,7 +75,6 @@ class LoginWidget(QWidget):
         layout.addWidget(title)
         layout.addSpacing(20)
 
-        # Credentials inputs
         self.username_input = QLineEdit()
         self.username_input.setPlaceholderText("Username")
         self.username_input.setFixedWidth(300)

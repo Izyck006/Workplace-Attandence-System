@@ -2,6 +2,14 @@
 AppId=RandaframesAttendanceV2
 AppName=Randaframes Attendance
 AppVersion=2.0.0
+AppPublisher=Zicron
+AppPublisherURL=https://zicron.com
+AppSupportURL=https://zicron.com
+AppUpdatesURL=https://zicron.com
+VersionInfoCompany=Zicron
+VersionInfoDescription=Randaframes Attendance Setup
+VersionInfoCopyright=Copyright (C) 2026 Zicron
+VersionInfoVersion=2.0.0.0
 DefaultDirName={autopf}\Randaframes Attendance
 DefaultGroupName=Randaframes Attendance
 OutputDir=..\release

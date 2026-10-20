@@ -63,7 +63,6 @@ def speak(text: str):
     from pathlib import Path
 
     def _run():
-        # 1. Check if matching pre-recorded audio exists in assets/audio/
         phrase_key = None
         lower = text.lower()
         if "welcome to randaframes" in lower:
@@ -82,11 +81,10 @@ def speak(text: str):
             if os.path.exists(asset_audio) and play_audio_file(asset_audio):
                 return
 
-        # 2. Check ElevenLabs API Key and local cache
         from dotenv import load_dotenv
         load_dotenv()
         api_key = os.getenv("ELEVENLABS_API_KEY", "")
-        voice_id = os.getenv("ELEVENLABS_VOICE_ID", "t2zuPBtbBvwLINfk1lqx")  # Default: Adeola (Nigerian)
+        voice_id = os.getenv("ELEVENLABS_VOICE_ID", "t2zuPBtbBvwLINfk1lqx")
 
         if api_key and voice_id:
             try:
@@ -99,7 +97,6 @@ def speak(text: str):
                     if play_audio_file(str(cached_file)):
                         return
 
-                # Fetch from ElevenLabs API
                 import urllib.request
                 import json
                 url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
@@ -118,9 +115,8 @@ def speak(text: str):
                     if play_audio_file(str(cached_file)):
                         return
             except Exception:
-                pass  # Fall back to native voice if plan limitation, offline, etc.
+                pass
 
-        # 3. Fallback: Fast native Windows SAPI voice (<100ms startup)
         f = None
         try:
             import tempfile

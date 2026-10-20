@@ -31,13 +31,11 @@ class MainWindow(QMainWindow):
         self.dashboard_view.logout_requested.connect(self.show_login_from_dashboard)
         self.dashboard_view.kiosk_requested.connect(self.show_kiosk)
         self.stacked_widget.setCurrentWidget(self.login_view)
-        # Voice intro on startup
         from src.utils import speak
         speak("Welcome to Randaframes Attendance System.")
 
     def show_login_from_kiosk(self):
         self.kiosk_view.stop_scanner()
-        # Keep kiosk token in memory so Back to Kiosk can resume immediately
         self.stacked_widget.setCurrentWidget(self.login_view)
 
     def show_login_from_dashboard(self):

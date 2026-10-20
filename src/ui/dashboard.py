@@ -167,7 +167,6 @@ class DeleteHistoryDialog(QDialog):
 
         today = QDate.currentDate()
 
-        # Specific staff option
         g_layout.addWidget(self.radio_staff)
         h_staff = QHBoxLayout()
         h_staff.setContentsMargins(24, 0, 0, 4)
@@ -192,7 +191,6 @@ class DeleteHistoryDialog(QDialog):
         h_staff.addStretch()
         g_layout.addLayout(h_staff)
 
-        # Cutoff date option
         g_layout.addWidget(self.radio_before)
         self.before_date_edit = QDateEdit(today.addDays(-30))
         self.before_date_edit.setCalendarPopup(True)
@@ -204,7 +202,6 @@ class DeleteHistoryDialog(QDialog):
         h_before.addStretch()
         g_layout.addLayout(h_before)
 
-        # Date range option
         g_layout.addWidget(self.radio_range)
         self.from_date_edit = QDateEdit(today.addDays(-60))
         self.from_date_edit.setCalendarPopup(True)
@@ -221,7 +218,6 @@ class DeleteHistoryDialog(QDialog):
         h_range.addStretch()
         g_layout.addLayout(h_range)
 
-        # Delete all option
         g_layout.addWidget(self.radio_all)
         layout.addWidget(group)
 
@@ -341,7 +337,7 @@ class DashboardWidget(QWidget):
         self.employees = {}
         self.loader = None
         self.inactivity_timer = QTimer(self)
-        self.inactivity_timer.setInterval(600_000)  # 10 minutes of inactivity auto-lock
+        self.inactivity_timer.setInterval(600_000)
         self.inactivity_timer.timeout.connect(self.on_inactivity_timeout)
         layout = QVBoxLayout(self)
 

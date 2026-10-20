@@ -21,11 +21,9 @@ def main():
     db = DatabaseManager.get_db()
     db.command('ping')
     path.parent.mkdir(parents=True, exist_ok=True)
-    # Exclusive creation prevents accidentally overwriting the only password copy.
     with path.open("x", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
         writer.writerow(["Office", "Username", "Temporary password"])
-        # A private pre-migration snapshot preserves original office-less records and templates.
         snapshot = path.parent / ('pre-migration-' + datetime.now().strftime('%Y%m%d-%H%M%S') + '.jsonl')
         with snapshot.open('x', encoding='utf-8') as backup:
             for collection in db.list_collection_names():

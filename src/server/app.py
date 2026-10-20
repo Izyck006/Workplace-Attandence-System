@@ -60,7 +60,6 @@ def get_db():
 async def security_and_rate_limit(request: Request, call_next):
     path = request.url.path
 
-    # Rate limiting on all routes (except health checks and test runner)
     if not os.getenv("PYTEST_CURRENT_TEST") and not os.getenv("TESTING") and path not in ("/health", "/healthz"):
         client_ip = rate_limiter.get_client_ip(request)
         if path == "/login":
@@ -90,7 +89,6 @@ async def security_and_rate_limit(request: Request, call_next):
 
     response = await call_next(request)
 
-    # Security headers
     response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains; preload"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
@@ -120,7 +118,6 @@ def current_user(credentials: HTTPAuthorizationCredentials = Depends(bearer), db
         raise HTTPException(403, "Invalid office assignment.")
     user["session_id"] = session["_id"]
     user["kiosk"] = session.get("kiosk", False)
-    # Sliding window: Admin console sessions expire after 10 minutes of inactivity
     if not user["kiosk"]:
         db.sessions.update_one(
             {"_id": session["_id"]},

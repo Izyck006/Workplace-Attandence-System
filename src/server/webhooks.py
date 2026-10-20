@@ -46,7 +46,6 @@ def verify_stripe_signature(payload: bytes, signature_header: Optional[str], sec
     if timestamp is None or not signatures:
         return False
 
-    # Prevent replay attacks: check timestamp tolerance
     if abs(time.time() - timestamp) > tolerance:
         return False
 

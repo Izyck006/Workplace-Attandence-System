@@ -3,7 +3,6 @@ from src.offices import OFFICES
 
 
 def initialize(db):
-    # Run on the server during deployment, never on an office workstation.
     from src.data.initial_schema import up
     up(db)
     validator = db.users.options().get('validator', {})
