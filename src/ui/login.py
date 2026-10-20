@@ -75,26 +75,6 @@ class LoginWidget(QWidget):
         layout.addWidget(title)
         layout.addSpacing(20)
 
-        # Server configuration section (hidden by default)
-        has_url = bool(api.url)
-        self.server_label = QLabel("Central Server Address:")
-        self.server_label.setStyleSheet("font-size: 12px; color: #aaa;")
-        self.server_input = QLineEdit(api.url or "https://randaframes-attendance.onrender.com")
-        self.server_input.setPlaceholderText("https://attendance.your-company.com")
-        self.server_input.setFixedWidth(300)
-
-        server_disp = api.url.replace("https://", "").replace("http://", "").rstrip("/") if has_url else "configured"
-        self.toggle_server_btn = QPushButton(f"Server: {server_disp} (Change)" if has_url else "Server Settings")
-        self.toggle_server_btn.setFlat(True)
-        self.toggle_server_btn.setCursor(Qt.PointingHandCursor)
-        self.toggle_server_btn.setStyleSheet("color: #7289da; font-size: 11px; text-decoration: underline; background: transparent; border: none;")
-        self.toggle_server_btn.clicked.connect(self.toggle_server_input)
-
-        layout.addWidget(self.server_label, alignment=Qt.AlignCenter)
-        layout.addWidget(self.server_input, alignment=Qt.AlignCenter)
-        self.server_label.hide()
-        self.server_input.hide()
-
         # Credentials inputs
         self.username_input = QLineEdit()
         self.username_input.setPlaceholderText("Username")
@@ -137,22 +117,9 @@ class LoginWidget(QWidget):
         layout.addWidget(self.login_btn, alignment=Qt.AlignCenter)
         layout.addSpacing(6)
         layout.addWidget(self.cancel_btn, alignment=Qt.AlignCenter)
-        layout.addSpacing(10)
-        layout.addWidget(self.toggle_server_btn, alignment=Qt.AlignCenter)
 
         self.password_input.returnPressed.connect(self.on_login)
         self.username_input.returnPressed.connect(self.password_input.setFocus)
-
-    def toggle_server_input(self):
-        is_hidden = self.server_input.isHidden()
-        self.server_label.setVisible(is_hidden)
-        self.server_input.setVisible(is_hidden)
-        if is_hidden:
-            self.server_input.setFocus()
-            self.toggle_server_btn.setText("Hide Server Settings")
-        else:
-            server_disp = api.url.replace("https://", "").replace("http://", "").rstrip("/")
-            self.toggle_server_btn.setText(f"Server: {server_disp} (Change)")
 
     def on_login(self):
         username = self.username_input.text().strip()
@@ -162,18 +129,11 @@ class LoginWidget(QWidget):
             QMessageBox.warning(self, "Error", "Username and password required.")
             return
 
-        server_url = self.server_input.text().strip()
-        if not server_url:
-            QMessageBox.warning(self, "Error", "Central server address required.")
-            self.server_label.show()
-            self.server_input.show()
-            return
-
         self.login_btn.setEnabled(False)
         self.login_btn.setText("Logging in...")
         self.cancel_btn.setEnabled(False)
 
-        self.worker = LoginWorker(server_url, username, password)
+        self.worker = LoginWorker(api.url, username, password)
         self.worker.finished_success.connect(self.on_login_success)
         self.worker.finished_error.connect(self.on_login_error)
         self.worker.start()
@@ -222,12 +182,6 @@ class LoginWidget(QWidget):
         self.cancel_btn.setEnabled(True)
         self.username_input.clear()
         self.password_input.clear()
-
-        server_disp = api.url.replace("https://", "").replace("http://", "").rstrip("/")
-        self.toggle_server_btn.setText(f"Server: {server_disp} (Change)")
-        self.server_label.hide()
-        self.server_input.hide()
-
         self.login_successful.emit(user)
 
     def on_login_error(self, error_msg):

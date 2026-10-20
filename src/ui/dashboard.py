@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
                              QTabWidget, QComboBox, QDateEdit, QLineEdit, QTableWidget,
                              QTableWidgetItem, QHeaderView, QMessageBox, QFileDialog, QInputDialog)
-from PySide6.QtCore import Qt, QDate, Signal, QThread
+from PySide6.QtCore import Qt, QDate, Signal, QThread, QTimer
 from PySide6.QtGui import QGuiApplication
 from bson import ObjectId
 from src.client import api, ClientDatabase
@@ -106,6 +106,9 @@ class DashboardWidget(QWidget):
         self.user = None
         self.employees = {}
         self.loader = None
+        self.inactivity_timer = QTimer(self)
+        self.inactivity_timer.setInterval(120_000)  # 2 minutes of inactivity auto-lock
+        self.inactivity_timer.timeout.connect(self.on_inactivity_timeout)
         layout = QVBoxLayout(self)
 
         header = QHBoxLayout()
@@ -225,6 +228,7 @@ class DashboardWidget(QWidget):
 
     def set_user(self, user):
         self.user = user
+        self.inactivity_timer.start(120_000)
         master = user['role'] == 'main_admin'
         self.title.setText('Master Admin (All Offices)' if master else OFFICE_MAP[user['office_id']]['name'])
         self.kiosk_button.setVisible(not master)
@@ -240,11 +244,30 @@ class DashboardWidget(QWidget):
         self.refresh()
 
     def clear_data(self):
+        self.inactivity_timer.stop()
         self.user = None
         self.employees = {}
         self.cached_records = []
         self.emp_table.setRowCount(0)
         self.attendance_table.setRowCount(0)
+
+    def reset_inactivity_timer(self):
+        if self.user:
+            self.inactivity_timer.start(120_000)
+
+    def on_inactivity_timeout(self):
+        self.inactivity_timer.stop()
+        if self.user:
+            QMessageBox.warning(self, 'Session Expired', 'Your admin session has expired after 2 minutes of inactivity for security.')
+            self.logout_requested.emit()
+
+    def mousePressEvent(self, event):
+        self.reset_inactivity_timer()
+        super().mousePressEvent(event)
+
+    def keyPressEvent(self, event):
+        self.reset_inactivity_timer()
+        super().keyPressEvent(event)
 
     def query(self):
         if self.user and self.user['role'] == 'office_admin':

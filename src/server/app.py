@@ -1,7 +1,10 @@
 """Office authorization is enforced here, independent of desktop filters."""
 from datetime import datetime, timedelta, timezone
+import html
 import json
 import logging
+import os
+import re
 import secrets
 
 from bson import ObjectId, json_util
@@ -14,11 +17,39 @@ from pymongo.errors import DuplicateKeyError, PyMongoError
 from src.data.database import DatabaseManager
 from src.offices import OFFICE_MAP
 from src.server.security import login, token_hash, validate_password, ph, generate_password
+from src.server.rate_limiter import rate_limiter
+from src.server.webhooks import verify_paystack_signature, verify_stripe_signature
 
 app = FastAPI(title="Randaframes Central Attendance", docs_url=None, redoc_url=None)
 bearer = HTTPBearer()
 log = logging.getLogger(__name__)
 LAGOS = timezone(timedelta(hours=1))
+
+CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+SCRIPT_RE = re.compile(r"<\s*script[^>]*>.*?<\s*/\s*script\s*>", re.IGNORECASE | re.DOTALL)
+TAG_RE = re.compile(r"<[^>]+>")
+
+
+def sanitize_string(value: str, max_length: int = 200) -> str:
+    if not isinstance(value, str):
+        return ""
+    cleaned = CONTROL_CHAR_RE.sub("", value).strip()
+    cleaned = SCRIPT_RE.sub("", cleaned)
+    cleaned = TAG_RE.sub("", cleaned)
+    cleaned = html.escape(cleaned)
+    return cleaned[:max_length]
+
+
+def validate_photo_bytes(data_bytes: bytes):
+    if not isinstance(data_bytes, bytes):
+        raise HTTPException(400, "Photo must be binary bytes.")
+    if len(data_bytes) > 2_000_000:
+        raise HTTPException(400, "Photo must be at most 2 MB.")
+    is_jpeg = data_bytes.startswith(b"\xff\xd8\xff")
+    is_png = data_bytes.startswith(b"\x89PNG\r\n\x1a\n")
+    is_webp = data_bytes.startswith(b"RIFF") and len(data_bytes) >= 12 and data_bytes[8:12] == b"WEBP"
+    if not (is_jpeg or is_png or is_webp):
+        raise HTTPException(400, "Invalid image format. Only JPEG, PNG, or WEBP photos are allowed.")
 
 
 def get_db():
@@ -26,7 +57,28 @@ def get_db():
 
 
 @app.middleware("http")
-async def body_limit(request: Request, call_next):
+async def security_and_rate_limit(request: Request, call_next):
+    path = request.url.path
+
+    # Rate limiting on all routes (except health checks and test runner)
+    if not os.getenv("PYTEST_CURRENT_TEST") and not os.getenv("TESTING") and path not in ("/health", "/healthz"):
+        client_ip = rate_limiter.get_client_ip(request)
+        if path == "/login":
+            allowed, retry = rate_limiter.check(f"login:{client_ip}", max_requests=15, window_seconds=60)
+        elif path == "/password" or (path.startswith("/offices/") and path.endswith("/reset-password")):
+            allowed, retry = rate_limiter.check(f"pw:{client_ip}", max_requests=10, window_seconds=60)
+        elif path == "/scan":
+            allowed, retry = rate_limiter.check(f"scan:{client_ip}", max_requests=60, window_seconds=60)
+        else:
+            allowed, retry = rate_limiter.check(f"gen:{client_ip}", max_requests=120, window_seconds=60)
+
+        if not allowed:
+            return JSONResponse(
+                {"detail": "Rate limit exceeded. Please wait before retrying."},
+                status_code=429,
+                headers={"Retry-After": str(retry)}
+            )
+
     size = 0
     chunks = []
     async for chunk in request.stream():
@@ -35,8 +87,18 @@ async def body_limit(request: Request, call_next):
             return JSONResponse({"detail": "Request too large"}, status_code=413)
         chunks.append(chunk)
     request._body = b"".join(chunks)
+
     response = await call_next(request)
-    response.headers["Cache-Control"] = "no-store"
+
+    # Security headers
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains; preload"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Content-Security-Policy"] = "default-src 'none'; frame-ancestors 'none'"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
     return response
 
 
@@ -58,6 +120,12 @@ def current_user(credentials: HTTPAuthorizationCredentials = Depends(bearer), db
         raise HTTPException(403, "Invalid office assignment.")
     user["session_id"] = session["_id"]
     user["kiosk"] = session.get("kiosk", False)
+    # Sliding window: Admin console sessions expire after 2 minutes of inactivity
+    if not user["kiosk"]:
+        db.sessions.update_one(
+            {"_id": session["_id"]},
+            {"$set": {"expires_at": datetime.utcnow() + timedelta(minutes=2)}}
+        )
     return user
 
 
@@ -171,8 +239,12 @@ def safe_query(query):
     allowed = {"$and", "$or", "$in", "$nin", "$ne", "$gte", "$lte", "$gt", "$lt", "$exists", "$eq"}
     if isinstance(query, dict):
         for key, value in query.items():
+            if not isinstance(key, str) or "\x00" in key:
+                raise HTTPException(400, "Invalid query key.")
             if key.startswith("$") and key not in allowed:
                 raise HTTPException(400, "Unsupported query.")
+            if "." in key:
+                raise HTTPException(400, "Nested key traversal not permitted.")
             safe_query(value)
     elif isinstance(query, list):
         for value in query:
@@ -185,6 +257,8 @@ def read(body: ReadBody, user=Depends(admin), db=Depends(get_db)):
         raise HTTPException(403, "Collection unavailable.")
     query = decode(body.query)
     safe_query(query)
+    if user["role"] == "office_admin" and isinstance(query, dict) and "office_id" in query:
+        del query["office_id"]
     if body.collection in ("employees", "attendance_records"):
         query = scope(user, query)
     elif body.collection == "offices" and user["role"] != "main_admin":
@@ -213,8 +287,8 @@ def save(body: WriteBody, user=Depends(admin), db=Depends(get_db)):
     data = decode(body.document)
     now = datetime.utcnow()
     if body.collection == "departments" and body.id is None:
-        name = data.get("name", "").strip()
-        if not name or len(name) > 100:
+        name = sanitize_string(data.get("name", ""), 100)
+        if not name:
             raise HTTPException(400, "Department name required (maximum 100 characters).")
         db.departments.update_one({"name": name}, {"$setOnInsert": {
             "name": name, "is_active": True, "created_at": now}}, upsert=True)
@@ -236,6 +310,8 @@ def save(body: WriteBody, user=Depends(admin), db=Depends(get_db)):
     if existing and office != existing.get("office_id"):
         raise HTTPException(400, "Office transfers require a reviewed migration; historical records must be preserved.")
     for field in ("first_name", "last_name", "employee_no", "job_title"):
+        if field in data and isinstance(data[field], str):
+            data[field] = sanitize_string(data[field], 200)
         value = data.get(field, (existing or {}).get(field, ""))
         if not isinstance(value, str) or len(value) > 200:
             raise HTTPException(400, f"Invalid {field}.")
@@ -243,9 +319,8 @@ def save(body: WriteBody, user=Depends(admin), db=Depends(get_db)):
         raise HTTPException(400, "Employee number required.")
     if data.get("status", "active") not in ("active", "inactive"):
         raise HTTPException(400, "Invalid employee status.")
-    if "photo_bytes" in data and data["photo_bytes"] is not None and (
-            not isinstance(data["photo_bytes"], bytes) or len(data["photo_bytes"]) > 2_000_000):
-        raise HTTPException(400, "Photo must be at most 2 MB.")
+    if "photo_bytes" in data and data["photo_bytes"] is not None:
+        validate_photo_bytes(data["photo_bytes"])
     data.update(office_id=office, updated_at=now)
     data.pop("created_at", None)
     data.pop("has_fingerprint", None)
@@ -351,3 +426,28 @@ def reset_password(office_id: str, user=Depends(master), db=Depends(get_db)):
     db.sessions.delete_many({"user_id": account["_id"]})
     audit(db, user, "office_password_reset", office_id)
     return {"username": account["username"], "password": password}
+
+
+@app.post("/webhooks/paystack")
+async def paystack_webhook(request: Request):
+    secret_key = os.getenv("PAYSTACK_SECRET_KEY", "")
+    sig = request.headers.get("x-paystack-signature")
+    body = await request.body()
+    if not verify_paystack_signature(body, sig, secret_key):
+        raise HTTPException(400, "Invalid Paystack signature.")
+    event = json.loads(body.decode("utf-8"))
+    log.info("Verified Paystack webhook event: %s", event.get("event"))
+    return {"status": "success"}
+
+
+@app.post("/webhooks/stripe")
+async def stripe_webhook(request: Request):
+    secret_key = os.getenv("STRIPE_WEBHOOK_SECRET", "")
+    sig = request.headers.get("stripe-signature")
+    body = await request.body()
+    if not verify_stripe_signature(body, sig, secret_key):
+        raise HTTPException(400, "Invalid Stripe signature.")
+    event = json.loads(body.decode("utf-8"))
+    log.info("Verified Stripe webhook event: %s", event.get("type"))
+    return {"status": "success"}
+
