@@ -402,6 +402,11 @@ class DashboardWidget(QWidget):
         export.clicked.connect(self.export_reports)
         filters.addWidget(export)
 
+        backups_btn = QPushButton('Daily Backups')
+        backups_btn.setToolTip('Open the local SQLite daily attendance backups folder')
+        backups_btn.clicked.connect(self.open_backups_folder)
+        filters.addWidget(backups_btn)
+
         self.delete_selected_btn = QPushButton('Delete Selected Log')
         self.delete_selected_btn.setToolTip('Permanently delete the selected attendance entry (Master Admin only)')
         self.delete_selected_btn.setStyleSheet("""
@@ -657,6 +662,15 @@ class DashboardWidget(QWidget):
                              f'   |   Not checked in: {max(0, len(active_ids) - present_count)}'
                              f'   |   Displayed records: {self.attendance_table.rowCount()}')
 
+        try:
+            from src.services.backup import BackupService
+            today_str = datetime.now(LAGOS).strftime('%Y-%m-%d')
+            today_records = [r for r in records if r.get('work_date') == today_str]
+            if today_records:
+                BackupService().backup_daily_attendance(records=today_records, employees=self.employees)
+        except Exception:
+            pass
+
     def populate_attendance_table(self, records):
         self.attendance_table.setRowCount(0)
         search = self.search.text().strip().lower()
@@ -757,6 +771,12 @@ class DashboardWidget(QWidget):
             QMessageBox.information(self, 'Export complete', path)
         except OSError as exc:
             QMessageBox.warning(self, 'Export failed', str(exc))
+
+    def open_backups_folder(self):
+        from src.services.backup import BackupService
+        service = BackupService()
+        if not service.open_backup_folder():
+            QMessageBox.information(self, 'Backups Location', f'Your daily SQLite backups are saved in:\n\n{service.backup_dir}')
 
     def reset_office_password(self):
         office = self.office_filter.currentData()
