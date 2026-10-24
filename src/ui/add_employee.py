@@ -106,11 +106,16 @@ class AddEmployeeDialog(QDialog):
         self.dept_input.addItems(["Engineering", "HR", "Groups", "Logistics", "Institute", "IT"])
         layout.addWidget(QLabel("Department:"))
         layout.addWidget(self.dept_input)
-        from src.client import api
-        from src.offices import OFFICES
+        from src.client import api, ClientDatabase
+        from src.offices import OFFICES, sync_offices
+        try:
+            db_offices = list(ClientDatabase.get_db().offices.find({}))
+            sync_offices(db_offices)
+        except Exception:
+            pass
         self.office_input = QComboBox()
         for office in OFFICES:
-            if api.user['role'] == 'main_admin' or office['_id'] == api.user.get('office_id'):
+            if api.user and (api.user.get('role') == 'main_admin' or office['_id'] == api.user.get('office_id')):
                 self.office_input.addItem(office['name'], office['_id'])
         if self.employee_doc:
             self.office_input.setCurrentIndex(self.office_input.findData(self.employee_doc.get('office_id')))

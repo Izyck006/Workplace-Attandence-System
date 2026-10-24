@@ -1,9 +1,16 @@
 import cv2
 import numpy as np
 
+
 class FingerprintMatcher:
-    def __init__(self):
-        self.detector = cv2.ORB_create(nfeatures=2000)
+    def __init__(self, nfeatures=500):
+        self.detector = cv2.ORB_create(
+            nfeatures=nfeatures,
+            scaleFactor=1.2,
+            nlevels=8,
+            edgeThreshold=15,
+            patchSize=31
+        )
         self.bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
 
     def extract_descriptors(self, image_bytes, width, height):
@@ -11,9 +18,15 @@ class FingerprintMatcher:
             return None
         img_array = np.frombuffer(image_bytes, dtype=np.uint8)
         img = img_array.reshape((height, width))
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-        img = clahe.apply(img)
-        keypoints, descriptors = self.detector.detectAndCompute(img, None)
+
+        # 1. Bilateral filter: smooths sweat/contact noise in valleys without blurring ridge edges
+        filtered = cv2.bilateralFilter(img, d=5, sigmaColor=50, sigmaSpace=50)
+
+        # 2. Balanced CLAHE enhancement
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+        enhanced = clahe.apply(filtered)
+
+        keypoints, descriptors = self.detector.detectAndCompute(enhanced, None)
         return descriptors
 
     def get_match_score(self, descriptors_probe, descriptors_db):
@@ -26,14 +39,15 @@ class FingerprintMatcher:
             score = 0
             for m in matches:
                 d = m.distance
-                if d < 25:
-                    score += 20
-                elif d < 30:
-                    score += 10
-                elif d < 35:
-                    score += 4
-                elif d < 40:
-                    score += 1
+                if d < 28:
+                    score += 25
+                elif d < 38:
+                    score += 15
+                elif d < 48:
+                    score += 8
+                elif d < 58:
+                    score += 3
             return score
         except Exception:
             return 0
+

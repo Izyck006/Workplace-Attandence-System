@@ -1,6 +1,7 @@
 from PySide6.QtCore import QThread, Signal
 import time
 import ctypes
+import numpy as np
 from src.scanner.kojack import KojackScanner
 
 
@@ -19,6 +20,9 @@ class IBSU_ImageData(ctypes.Structure):
         ("ProcessThres", ctypes.c_uint32),
     ]
 
+HOLD_DURATION = 3.0  # Steady 3-second hold for proper fingerprint settling and capture
+
+
 class ScannerWorker(QThread):
     scan_complete = Signal(object)
     scan_error = Signal(str)
@@ -33,74 +37,101 @@ class ScannerWorker(QThread):
 
     def run(self):
         self.scan_status.emit("Initializing scanner...")
-        
-        
+
         if not self.scanner or self.scanner.get_device_count() == 0:
             self.scan_error.emit("No scanner detected.")
             return
-            
+
         if self.scanner._handle is None:
             if not self.scanner.open_device(0):
                 self.scan_error.emit("Failed to open scanner (Is it locked?).")
                 return
-            
-        self.scan_status.emit("Please place your finger on the scanner...")
-        
-        
+
+        self.scan_status.emit("Place finger flat on scanner and hold steady (3s)...")
+
         try:
-            self.scan_status.emit("Scanner Active: Waiting for finger...")
-            
             if not self.scanner.begin_capture(self.image_type):
                 self.scan_error.emit("Capture could not start. Reconnect the scanner and try again.")
                 return
-            
-            good_frame_count = 0
-            
+
+            hold_start_time = None
+            best_frame = None
+            best_sharpness = -1.0
+            last_second_reported = -1
+            lost_finger_frames = 0
+
             while self._is_running:
-                
                 success, image_bytes, w, h, is_final, finger_state = self.scanner.block_get_image(ignore_preview=False)
-                
-                if success and image_bytes:
-                    if is_final:
-                        try:
-                            import winsound
-                            winsound.Beep(1500, 200) 
-                        except Exception:
-                            pass
-                            
-                        self.scan_status.emit("Image captured!")
-                        self.scan_complete.emit({
-                            "status": "success", 
-                            "image": image_bytes,
-                            "width": w,
-                            "height": h
-                        })
-                        
-                        
-                        time.sleep(1)
-                        break
+
+                if success and image_bytes and w > 0 and h > 0:
+                    self.preview_frame.emit(image_bytes, w, h)
+
+                    # State 0: OK/Present, State 2: Contact/Present
+                    finger_on_platen = (finger_state in (0, 2))
+
+                    if finger_on_platen:
+                        lost_finger_frames = 0
+                        now = time.time()
+                        if hold_start_time is None:
+                            hold_start_time = now
+                            best_frame = None
+                            best_sharpness = -1.0
+                            last_second_reported = -1
+
+                        elapsed = now - hold_start_time
+                        remaining = max(1, int(HOLD_DURATION - elapsed + 0.99))
+
+                        if remaining != last_second_reported:
+                            last_second_reported = remaining
+                            self.scan_status.emit(f"Scanning: Hold finger steady ({remaining}s remaining)...")
+
+                        # Track best frame by ridge-valley contrast
+                        img_np = np.frombuffer(image_bytes, dtype=np.uint8)
+                        sharpness = float(np.std(img_np))
+                        if sharpness > best_sharpness:
+                            best_sharpness = sharpness
+                            best_frame = (image_bytes, w, h)
+
+                        if elapsed >= HOLD_DURATION:
+                            # 3-second hold completed successfully!
+                            try:
+                                import winsound
+                                winsound.Beep(1500, 250)
+                            except Exception:
+                                pass
+
+                            self.scan_status.emit("Scan complete!")
+                            final_bytes, final_w, final_h = best_frame if best_frame else (image_bytes, w, h)
+                            self.scan_complete.emit({
+                                "status": "success",
+                                "image": final_bytes,
+                                "width": final_w,
+                                "height": final_h
+                            })
+                            time.sleep(1)
+                            break
                     else:
-                        
-                        self.preview_frame.emit(image_bytes, w, h)
-                        
-                        
-                        
-                        if finger_state in (0, 2): 
-                            good_frame_count += 1
-                            if good_frame_count >= 10: 
-                                self.scanner.take_result_image_manually()
-                                good_frame_count = 0
+                        # Platen is empty or finger lifted
+                        if hold_start_time is not None:
+                            lost_finger_frames += 1
+                            if lost_finger_frames > 4:  # ~150ms buffer for transient contact flutter
+                                hold_start_time = None
+                                best_frame = None
+                                best_sharpness = -1.0
+                                last_second_reported = -1
+                                lost_finger_frames = 0
+                                self.scan_status.emit("Finger lifted too soon. Please hold flat for 3 seconds.")
                         else:
-                            good_frame_count = 0
-                            
-                        time.sleep(0.01)
+                            self.scan_status.emit("Place finger flat on scanner and hold steady (3s)...")
+
+                    time.sleep(0.03)
                 else:
                     time.sleep(0.05)
-                
+
         except Exception as e:
             try:
                 import winsound
-                winsound.Beep(250, 500) 
+                winsound.Beep(250, 500)
             except Exception:
                 pass
             self.scan_error.emit(str(e))

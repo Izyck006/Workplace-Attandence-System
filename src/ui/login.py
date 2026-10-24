@@ -1,10 +1,44 @@
 import os
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
-                             QPushButton, QMessageBox, QInputDialog)
+                             QPushButton, QMessageBox, QInputDialog, QDialog)
 from PySide6.QtCore import Qt, Signal, QThread
 from PySide6.QtGui import QFont, QPixmap
 from src.utils import get_asset_path
 from src.client import api
+from src.ui.password_input import PasswordLineEdit
+from src.ui.theme import ThemeToggleButton
+
+
+class ChangePasswordDialog(QDialog):
+    def __init__(self, title="Change Temporary Password",
+                 message="Set your permanent password (at least 10 characters with letters, numbers, and symbols):", parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setFixedWidth(420)
+        vbox = QVBoxLayout(self)
+        vbox.setSpacing(14)
+        vbox.setContentsMargins(24, 20, 24, 20)
+
+        lbl = QLabel(message)
+        lbl.setWordWrap(True)
+        lbl.setStyleSheet("font-size: 13px; line-height: 1.4;")
+        vbox.addWidget(lbl)
+
+        self.input = PasswordLineEdit("New Password")
+        vbox.addWidget(self.input)
+
+        btn_box = QHBoxLayout()
+        btn_box.addStretch()
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        ok_btn = QPushButton("Save Password")
+        ok_btn.clicked.connect(self.accept)
+        btn_box.addWidget(cancel_btn)
+        btn_box.addWidget(ok_btn)
+        vbox.addLayout(btn_box)
+
+    def get_password(self):
+        return self.input.text()
 
 
 class LoginWorker(QThread):
@@ -49,6 +83,8 @@ class LoginWidget(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setObjectName("loginWidget")
+        self.setAttribute(Qt.WA_StyledBackground, True)
         self.worker = None
         self.pw_worker = None
         self.current_user_pending = None
@@ -56,6 +92,13 @@ class LoginWidget(QWidget):
 
     def setup_ui(self):
         layout = QVBoxLayout(self)
+
+        top_bar = QHBoxLayout()
+        top_bar.addStretch()
+        self.theme_btn = ThemeToggleButton()
+        top_bar.addWidget(self.theme_btn)
+        layout.addLayout(top_bar)
+
         layout.setAlignment(Qt.AlignCenter)
 
         logo_path = get_asset_path("randaframes logo.jpg")
@@ -69,19 +112,17 @@ class LoginWidget(QWidget):
             logo_label.setStyleSheet("margin-bottom: 12px;")
             layout.addWidget(logo_label, alignment=Qt.AlignCenter)
 
-        title = QLabel("Admin Console Login")
-        title.setFont(QFont("Arial", 22, QFont.Bold))
-        title.setAlignment(Qt.AlignCenter)
-        layout.addWidget(title)
+        self.title = QLabel("Admin Login")
+        self.title.setFont(QFont("Arial", 22, QFont.Bold))
+        self.title.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.title)
         layout.addSpacing(20)
 
         self.username_input = QLineEdit()
         self.username_input.setPlaceholderText("Username")
         self.username_input.setFixedWidth(300)
 
-        self.password_input = QLineEdit()
-        self.password_input.setPlaceholderText("Password")
-        self.password_input.setEchoMode(QLineEdit.Password)
+        self.password_input = PasswordLineEdit("Password")
         self.password_input.setFixedWidth(300)
 
         self.login_btn = QPushButton("Log In")
@@ -94,20 +135,8 @@ class LoginWidget(QWidget):
         self.cancel_btn.setFixedWidth(300)
         self.cancel_btn.setFixedHeight(34)
         self.cancel_btn.setCursor(Qt.PointingHandCursor)
-        self.cancel_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #3f4248;
-                color: #e0e0e0;
-                border: 1px solid #555;
-                border-radius: 4px;
-                font-size: 13px;
-                font-weight: 500;
-            }
-            QPushButton:hover {
-                background-color: #4f535a;
-                color: #ffffff;
-            }
-        """)
+        self._apply_cancel_btn_style(self.theme_btn.theme_mgr.is_dark)
+        self.theme_btn.theme_mgr.theme_changed.connect(self._apply_cancel_btn_style)
         self.cancel_btn.clicked.connect(self.cancel_requested.emit)
 
         layout.addWidget(self.username_input, alignment=Qt.AlignCenter)
@@ -116,6 +145,44 @@ class LoginWidget(QWidget):
         layout.addWidget(self.login_btn, alignment=Qt.AlignCenter)
         layout.addSpacing(6)
         layout.addWidget(self.cancel_btn, alignment=Qt.AlignCenter)
+
+    def _apply_cancel_btn_style(self, is_dark: bool):
+        try:
+            import shiboken6
+            if not shiboken6.isValid(self) or not hasattr(self, 'cancel_btn') or not shiboken6.isValid(self.cancel_btn):
+                return
+        except Exception:
+            return
+        if is_dark:
+            self.cancel_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #3f4248;
+                    color: #ffffff;
+                    border: 1px solid #555555;
+                    border-radius: 4px;
+                    font-size: 13px;
+                    font-weight: 500;
+                }
+                QPushButton:hover {
+                    background-color: #4f535a;
+                    color: #ffffff;
+                }
+            """)
+        else:
+            self.cancel_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #e5e7eb;
+                    color: #1f2937;
+                    border: 1px solid #cbd5e1;
+                    border-radius: 4px;
+                    font-size: 13px;
+                    font-weight: 500;
+                }
+                QPushButton:hover {
+                    background-color: #d1d5db;
+                    color: #111827;
+                }
+            """)
 
         self.password_input.returnPressed.connect(self.on_login)
         self.username_input.returnPressed.connect(self.password_input.setFocus)
@@ -140,18 +207,14 @@ class LoginWidget(QWidget):
     def on_login_success(self, user):
         self.current_user_pending = user
         if user.get("must_change_password"):
-            new_password, ok = QInputDialog.getText(
-                self,
-                "Change Temporary Password",
-                "Set your permanent password (at least 10 characters with letters, numbers, and symbols):",
-                QLineEdit.Password
-            )
-            if not ok or not new_password:
+            dialog = ChangePasswordDialog(parent=self)
+            if dialog.exec() != QDialog.Accepted or not dialog.get_password():
                 self.login_btn.setEnabled(True)
                 self.login_btn.setText("Log In")
                 self.cancel_btn.setEnabled(True)
                 api.logout()
                 return
+            new_password = dialog.get_password()
 
             self.login_btn.setText("Updating password...")
             self.pw_worker = PasswordChangeWorker(new_password)

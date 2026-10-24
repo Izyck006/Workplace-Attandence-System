@@ -147,6 +147,43 @@ def test_scan_matches_only_own_office_and_rejects_inactive_staff(system, monkeyp
     assert client.post('/scan', headers=headers, json={'samples': [[[1] * 32] * 25], 'action': 'in'}).status_code == 404
 
 
+def test_scan_accommodating_match_and_no_second_place_penalty(system, monkeypatch):
+    client, db, kano, abuja = system
+    headers = auth(client)
+    from src.services.fingerprint import FingerprintMatcher
+
+    # Create a second active employee in Kano
+    other_kano = db.employees.insert_one({
+        'office_id': 'engineering-kano', 'first_name': 'Second', 'last_name': 'Kano',
+        'employee_no': 'K2', 'status': 'active', 'has_fingerprint': True,
+        'fingerprint_samples': [[[5] * 32] * 12]
+    }).inserted_id
+
+    db.employees.update_one({'_id': kano['_id']}, {'$set': {
+        'status': 'active', 'has_fingerprint': True, 'fingerprint_samples': [[[1] * 32] * 12]}})
+
+    # Score 20 for kano, 19 for other_kano (diff is only 1 point)
+    def mock_score(self, probe, cand):
+        if (cand == 1).all():
+            return 20
+        if (cand == 5).all():
+            return 19
+        return 0
+
+    monkeypatch.setattr(FingerprintMatcher, 'get_match_score', mock_score)
+
+    # 12 descriptors is now accepted (previously required >= 20)
+    # And diff of 1 (20 - 19) is accepted (previously rejected when diff < 6)
+    res = client.post('/scan', headers=headers, json={'samples': [[[1] * 32] * 12], 'action': 'in'})
+    assert res.status_code == 200
+    assert res.json()['employee']['employee_no'] == kano['employee_no']
+
+    # Score below 18 is rejected
+    monkeypatch.setattr(FingerprintMatcher, 'get_match_score', lambda self, p, c: 17)
+    res_low = client.post('/scan', headers=headers, json={'samples': [[[1] * 32] * 12], 'action': 'in'})
+    assert res_low.status_code == 404
+
+
 def test_query_code_and_unauthenticated_access_rejected(system):
     client, db, kano, abuja = system
     assert client.post('/read', json={'collection': 'employees'}).status_code in (401, 403)

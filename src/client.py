@@ -74,11 +74,17 @@ class ApiClient:
         if not self.url:
             raise ValueError("Enter the central server address first.")
         headers = {"Authorization": f"Bearer {self.token}"} if self.token else {}
+        headers["Content-Type"] = "application/json"
+        payload_bytes = json_util.dumps(body or {}).encode("utf-8")
         try:
-            response = self._session.post(self.url + path, json=json.loads(json_util.dumps(body or {})),
-                                          headers=headers, timeout=(5, 30), allow_redirects=False)
-        except requests.RequestException:
-            raise ValueError("Cannot reach the central server. Check your connection and retry; no success was confirmed.") from None
+            response = self._session.post(self.url + path, data=payload_bytes,
+                                          headers=headers, timeout=(15, 60), allow_redirects=False)
+        except requests.exceptions.ConnectTimeout:
+            raise ValueError("Cannot reach the central server (connection timed out). Check your internet connection and retry.") from None
+        except requests.exceptions.ReadTimeout:
+            raise ValueError("The central server took too long to respond (read timeout). Please retry.") from None
+        except requests.RequestException as exc:
+            raise ValueError(f"Cannot reach the central server ({type(exc).__name__}). Check your connection and retry.") from None
         if not 200 <= response.status_code < 300:
             try:
                 message = response.json().get("detail", "Request failed.")

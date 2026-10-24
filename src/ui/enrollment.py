@@ -50,17 +50,17 @@ class EnrollFingerprintDialog(QDialog):
             
         if is_two_finger:
             self.instructions = [
-                "Capture 1 of 3: Place both thumbs on the scanner.",
-                "Capture 2 of 3: Lift and place both thumbs again.",
-                "Capture 3 of 3: Lift and place both thumbs one last time."
+                "Capture 1 of 3: Place both thumbs flat and hold steady (3s)...",
+                "Capture 2 of 3: Lift and place both thumbs flat again (3s)...",
+                "Capture 3 of 3: Lift and place both thumbs flat one last time (3s)..."
             ]
             self.image_types = [3, 3, 3]
             self.setWindowTitle("Enroll Fingerprints (Dual Finger)")
         else:
             self.instructions = [
-                "Capture 1 of 3: Place your finger on the scanner.",
-                "Capture 2 of 3: Lift and place your finger again.",
-                "Capture 3 of 3: Lift and place your finger one last time."
+                "Capture 1 of 3: Place finger flat on scanner and hold steady (3s)...",
+                "Capture 2 of 3: Lift and place finger flat again, hold steady (3s)...",
+                "Capture 3 of 3: Lift and place finger flat one last time (3s)..."
             ]
             self.image_types = [2, 2, 2]
             self.setWindowTitle("Enroll Fingerprints (Single Finger)")
@@ -127,7 +127,8 @@ class EnrollFingerprintDialog(QDialog):
         self.worker = None
             
     def on_status(self, msg):
-        pass
+        self.status_label.setStyleSheet("font-size: 16px; color: #4285F4; font-weight: bold;")
+        self.status_label.setText(msg)
         
     def on_error(self, msg):
         self.status_label.setStyleSheet("font-size: 16px; color: red;")

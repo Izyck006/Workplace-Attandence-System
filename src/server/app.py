@@ -64,8 +64,8 @@ async def security_and_rate_limit(request: Request, call_next):
         client_ip = rate_limiter.get_client_ip(request)
         if path == "/login":
             allowed, retry = rate_limiter.check(f"login:{client_ip}", max_requests=15, window_seconds=60)
-        elif path == "/password" or (path.startswith("/offices/") and path.endswith("/reset-password")) or path == "/attendance/delete":
-            allowed, retry = rate_limiter.check(f"pw:{client_ip}", max_requests=10, window_seconds=60)
+        elif path == "/password" or path.startswith("/offices/") or path == "/attendance/delete":
+            allowed, retry = rate_limiter.check(f"pw:{client_ip}", max_requests=20, window_seconds=60)
         elif path == "/scan":
             allowed, retry = rate_limiter.check(f"scan:{client_ip}", max_requests=60, window_seconds=60)
         else:
@@ -106,6 +106,19 @@ async def database_error(request, exc):
     return JSONResponse({"detail": "Database unavailable. No success was confirmed; reconnect and retry."}, status_code=503)
 
 
+def is_valid_office(office_id: str, db=None) -> bool:
+    if not office_id or not isinstance(office_id, str):
+        return False
+    if office_id in OFFICE_MAP:
+        return True
+    if db is not None:
+        doc = db.offices.find_one({"_id": office_id})
+        if doc:
+            OFFICE_MAP[office_id] = doc
+            return True
+    return False
+
+
 def current_user(credentials: HTTPAuthorizationCredentials = Depends(bearer), db=Depends(get_db)):
     session = db.sessions.find_one({"_id": token_hash(credentials.credentials),
                                     "expires_at": {"$gt": datetime.utcnow()}})
@@ -114,7 +127,7 @@ def current_user(credentials: HTTPAuthorizationCredentials = Depends(bearer), db
     user = db.users.find_one({"_id": session["user_id"], "is_active": True})
     if not user or user.get("role") not in ("main_admin", "office_admin"):
         raise HTTPException(401, "Account unavailable.")
-    if user["role"] == "office_admin" and user.get("office_id") not in OFFICE_MAP:
+    if user["role"] == "office_admin" and not is_valid_office(user.get("office_id"), db):
         raise HTTPException(403, "Invalid office assignment.")
     user["session_id"] = session["_id"]
     user["kiosk"] = session.get("kiosk", False)
@@ -302,7 +315,7 @@ def save(body: WriteBody, user=Depends(admin), db=Depends(get_db)):
         if not existing:
             raise HTTPException(404, "Employee not found.")
     office = user.get("office_id") if user["role"] == "office_admin" else data.get("office_id", (existing or {}).get("office_id"))
-    if office not in OFFICE_MAP or (data.get("office_id") and data["office_id"] != office):
+    if not is_valid_office(office, db) or (data.get("office_id") and data["office_id"] != office):
         raise HTTPException(403, "Invalid office for this account.")
     if existing and office != existing.get("office_id"):
         raise HTTPException(400, "Office transfers require a reviewed migration; historical records must be preserved.")
@@ -343,7 +356,7 @@ def descriptor_arrays(samples):
     arrays = []
     for sample in samples:
         arr = np.asarray(sample)
-        if arr.ndim != 2 or not (20 <= arr.shape[0] <= 2000) or arr.shape[1] != 32:
+        if arr.ndim != 2 or not (10 <= arr.shape[0] <= 2000) or arr.shape[1] != 32:
             raise HTTPException(400, "Poor or invalid fingerprint sample. Scan again.")
         if arr.dtype.kind not in "iu" or (arr < 0).any() or (arr > 255).any():
             raise HTTPException(400, "Invalid fingerprint data.")
@@ -402,8 +415,7 @@ def scan(body: ScanBody, user=Depends(ready_user), db=Depends(get_db)):
                     for candidate in descriptor_arrays(employee["fingerprint_samples"]))
         scores.append((score, employee))
     scores.sort(key=lambda pair: pair[0], reverse=True)
-    second = scores[1][0] if len(scores) > 1 else 0
-    if not scores or scores[0][0] < 25 or (second and scores[0][0] - second < 6):
+    if not scores or scores[0][0] < 18:
         raise HTTPException(404, "Fingerprint not recognized clearly. Scan again or ask your office admin to enroll you.")
     employee = scores[0][1]
     action = record_attendance(db, employee, body.action)
@@ -423,6 +435,62 @@ def reset_password(office_id: str, user=Depends(master), db=Depends(get_db)):
     db.sessions.delete_many({"user_id": account["_id"]})
     audit(db, user, "office_password_reset", office_id)
     return {"username": account["username"], "password": password}
+
+
+class CreateOfficeBody(BaseModel):
+    name: str
+    location: str
+    office_id: str | None = None
+    username: str | None = None
+    password: str | None = None
+
+
+@app.post("/offices/create")
+def create_office(body: CreateOfficeBody, user=Depends(master), db=Depends(get_db)):
+    name = sanitize_string(body.name.strip(), 100) if body.name else ""
+    location = sanitize_string(body.location.strip(), 100) if body.location else ""
+    if not name or not location:
+        raise HTTPException(400, "Office name and location are required.")
+
+    if body.office_id and body.office_id.strip():
+        raw_id = re.sub(r"[^a-zA-Z0-9_-]", "", body.office_id.strip().lower().replace(" ", "-"))
+    else:
+        raw_id = re.sub(r"[^a-zA-Z0-9_-]", "", name.lower().replace(" ", "-"))
+    office_id = raw_id[:50]
+    if not office_id:
+        raise HTTPException(400, "Invalid office identifier.")
+
+    if db.offices.find_one({"_id": office_id}) or office_id in OFFICE_MAP:
+        raise HTTPException(400, f"Office with ID '{office_id}' already exists.")
+
+    username = (body.username.strip() if body.username else office_id).lower()
+    if db.users.find_one({"username": username}):
+        raise HTTPException(400, f"Username '{username}' is already taken.")
+
+    password = body.password if (body.password and len(body.password) >= 8) else generate_password()
+
+    office_doc = {"_id": office_id, "name": name, "location": location}
+    db.offices.insert_one(office_doc)
+    OFFICE_MAP[office_id] = office_doc
+
+    db.users.insert_one({
+        "username": username,
+        "password_hash": ph.hash(password),
+        "role": "office_admin",
+        "office_id": office_id,
+        "is_active": True,
+        "must_change_password": True,
+        "failed_attempts": 0,
+        "locked_until": None
+    })
+
+    audit(db, user, "office_created", office_id)
+    return {
+        "ok": True,
+        "office": office_doc,
+        "username": username,
+        "password": password
+    }
 
 
 class DeleteAttendanceBody(BaseModel):
@@ -466,7 +534,7 @@ def delete_attendance(body: DeleteAttendanceBody, user=Depends(master), db=Depen
         raise HTTPException(400, "Specify a record ID, staff log date, date range, or delete_all flag.")
 
     if body.office_id:
-        if body.office_id not in OFFICE_MAP:
+        if not is_valid_office(body.office_id, db):
             raise HTTPException(400, "Invalid office ID.")
         query["office_id"] = body.office_id
 

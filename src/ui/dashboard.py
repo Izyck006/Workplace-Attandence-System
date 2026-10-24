@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushB
                              QTableWidgetItem, QHeaderView, QMessageBox, QFileDialog, QInputDialog,
                              QDialog, QRadioButton, QButtonGroup, QGroupBox)
 from PySide6.QtCore import Qt, QDate, Signal, QThread, QTimer
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtGui import QGuiApplication, QColor, QFont
 from bson import ObjectId
 from src.client import api, ClientDatabase
 from src.offices import OFFICES, OFFICE_MAP
@@ -136,7 +136,7 @@ class DeleteHistoryDialog(QDialog):
             employees = None
         super().__init__(parent)
         self.employees = employees or {}
-        self.setWindowTitle("Batch Delete Attendance History")
+        self.setWindowTitle("Delete Attendance History")
         self.setFixedWidth(520)
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
@@ -156,14 +156,12 @@ class DeleteHistoryDialog(QDialog):
 
         self.btn_group = QButtonGroup(self)
         self.radio_staff = QRadioButton("Particular staff log on a specific day")
-        self.radio_before = QRadioButton("Records on or before cutoff date")
         self.radio_range = QRadioButton("Records within date range")
         self.radio_all = QRadioButton("ALL attendance records across all time")
 
         self.btn_group.addButton(self.radio_staff, 1)
-        self.btn_group.addButton(self.radio_before, 2)
-        self.btn_group.addButton(self.radio_range, 3)
-        self.btn_group.addButton(self.radio_all, 4)
+        self.btn_group.addButton(self.radio_range, 2)
+        self.btn_group.addButton(self.radio_all, 3)
 
         today = QDate.currentDate()
 
@@ -191,17 +189,6 @@ class DeleteHistoryDialog(QDialog):
         h_staff.addStretch()
         g_layout.addLayout(h_staff)
 
-        g_layout.addWidget(self.radio_before)
-        self.before_date_edit = QDateEdit(today.addDays(-30))
-        self.before_date_edit.setCalendarPopup(True)
-        self.before_date_edit.setFixedWidth(130)
-        h_before = QHBoxLayout()
-        h_before.setContentsMargins(24, 0, 0, 4)
-        h_before.addWidget(QLabel("Cutoff Date:"))
-        h_before.addWidget(self.before_date_edit)
-        h_before.addStretch()
-        g_layout.addLayout(h_before)
-
         g_layout.addWidget(self.radio_range)
         self.from_date_edit = QDateEdit(today.addDays(-60))
         self.from_date_edit.setCalendarPopup(True)
@@ -223,7 +210,6 @@ class DeleteHistoryDialog(QDialog):
 
         self.radio_staff.setChecked(True)
         self.radio_staff.toggled.connect(self._update_radio_states)
-        self.radio_before.toggled.connect(self._update_radio_states)
         self.radio_range.toggled.connect(self._update_radio_states)
         self.radio_all.toggled.connect(self._update_radio_states)
         self._update_radio_states()
@@ -295,11 +281,9 @@ class DeleteHistoryDialog(QDialog):
         self.staff_combo.setEnabled(staff_active)
         self.staff_date_edit.setEnabled(staff_active)
 
-        before_active = self.radio_before.isChecked()
-        self.before_date_edit.setEnabled(before_active)
-
         range_active = self.radio_range.isChecked()
         self.from_date_edit.setEnabled(range_active)
+        self.to_date_edit.setEnabled(range_active)
         if hasattr(self, 'confirm_input'):
             self._check_confirm(self.confirm_input.text())
 
@@ -317,9 +301,6 @@ class DeleteHistoryDialog(QDialog):
             return {"employee_id": emp_id, "work_date": work_date, "office_id": office_id}
         elif self.radio_all.isChecked():
             return {"delete_all": True, "office_id": office_id}
-        elif self.radio_before.isChecked():
-            before_str = self.before_date_edit.date().toString("yyyy-MM-dd")
-            return {"before_date": before_str, "office_id": office_id}
         else:
             from_str = self.from_date_edit.date().toString("yyyy-MM-dd")
             to_str = self.to_date_edit.date().toString("yyyy-MM-dd")
@@ -332,6 +313,8 @@ class DashboardWidget(QWidget):
 
     def __init__(self, scanner_provider=None, parent=None):
         super().__init__(parent)
+        self.setObjectName("dashboardWidget")
+        self.setAttribute(Qt.WA_StyledBackground, True)
         self.scanner_provider = scanner_provider
         self.user = None
         self.employees = {}
@@ -346,6 +329,11 @@ class DashboardWidget(QWidget):
         self.title.setStyleSheet('font-size: 22px; font-weight: bold;')
         header.addWidget(self.title)
         header.addStretch()
+
+        from src.ui.theme import ThemeToggleButton, ThemeManager
+        self.theme_btn = ThemeToggleButton()
+        header.addWidget(self.theme_btn)
+        ThemeManager.instance().theme_changed.connect(self.on_theme_changed)
 
         self.kiosk_button = QPushButton('Open attendance terminal')
         self.kiosk_button.clicked.connect(self.kiosk_requested.emit)
@@ -398,7 +386,8 @@ class DashboardWidget(QWidget):
         refresh.clicked.connect(self.refresh)
         filters.addWidget(refresh)
 
-        export = QPushButton('Export CSV')
+        export = QPushButton('Export Sheet')
+        export.setToolTip('Export attendance records to Excel (.xlsx) or CSV')
         export.clicked.connect(self.export_reports)
         filters.addWidget(export)
 
@@ -444,7 +433,7 @@ class DashboardWidget(QWidget):
         layout.addWidget(self.tabs)
 
         self.attendance_table = self.table(['Location', 'Office', 'Name', 'Employee ID',
-                                           'Job Title', 'Date', 'Time In', 'Time Out', 'Minutes', 'Status'])
+                                           'Job Title', 'Date', 'Time In', 'Time Out', 'Status'])
         self.attendance_table.itemSelectionChanged.connect(self.on_attendance_selection_changed)
         self.tabs.addTab(self.attendance_table, 'Attendance sheet')
 
@@ -474,6 +463,52 @@ class DashboardWidget(QWidget):
         self.emp_table = self.table(['Office', 'Employee ID', 'Name', 'Job Title', 'Status', 'Fingerprint'])
         employee_layout.addWidget(self.emp_table)
         self.tabs.addTab(employees, 'Manage employees')
+
+        # Offices Tab (Master Admin only) - Named 'Add offices' next to 'Manage employees'
+        self.offices_widget = QWidget()
+        offices_layout = QVBoxLayout(self.offices_widget)
+        offices_layout.setContentsMargins(0, 10, 0, 0)
+        offices_layout.setSpacing(10)
+
+        office_actions = QHBoxLayout()
+        self.add_office_btn = QPushButton('+ Add New Office')
+        self.add_office_btn.setFixedHeight(34)
+        self.add_office_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2563eb;
+                color: #ffffff;
+                border-radius: 6px;
+                font-size: 13px;
+                font-weight: 600;
+                padding: 0 16px;
+            }
+            QPushButton:hover {
+                background-color: #1d4ed8;
+            }
+            QPushButton:pressed {
+                background-color: #1e40af;
+            }
+        """)
+        self.add_office_btn.clicked.connect(self.open_add_office)
+        office_actions.addWidget(self.add_office_btn)
+
+        self.reset_office_pw_btn = QPushButton('Reset Office Password')
+        self.reset_office_pw_btn.setFixedHeight(34)
+        self.reset_office_pw_btn.setToolTip('Reset temporary password for the selected office and copy to clipboard')
+        self.reset_office_pw_btn.clicked.connect(self.reset_selected_office_password)
+        office_actions.addWidget(self.reset_office_pw_btn)
+
+        self.refresh_offices_btn = QPushButton('Refresh')
+        self.refresh_offices_btn.setFixedHeight(34)
+        self.refresh_offices_btn.clicked.connect(self.populate_offices_table)
+        office_actions.addWidget(self.refresh_offices_btn)
+
+        office_actions.addStretch()
+        offices_layout.addLayout(office_actions)
+
+        self.offices_table = self.table(['Location', 'Office Name', 'Office ID', 'Admin Username', 'Status', 'Staff Count'])
+        offices_layout.addWidget(self.offices_table)
+        self.tabs.addTab(self.offices_widget, 'Add offices')
 
         master_actions = QHBoxLayout()
         master_actions.setContentsMargins(0, 10, 0, 4)
@@ -505,7 +540,7 @@ class DashboardWidget(QWidget):
         self.reset_button.clicked.connect(self.reset_office_password)
         master_actions.addWidget(self.reset_button)
 
-        self.delete_history_btn = QPushButton('Batch Delete History...')
+        self.delete_history_btn = QPushButton('Delete History...')
         self.delete_history_btn.setFixedHeight(34)
         self.delete_history_btn.setStyleSheet("""
             QPushButton {
@@ -570,6 +605,12 @@ class DashboardWidget(QWidget):
         self.office_filter.setCurrentIndex(0 if master else self.office_filter.findData(user['office_id']))
         self.location_filter.blockSignals(False)
         self.office_filter.blockSignals(False)
+        if hasattr(self, 'offices_widget'):
+            offices_idx = self.tabs.indexOf(self.offices_widget)
+            if offices_idx != -1:
+                self.tabs.setTabVisible(offices_idx, master)
+        if master:
+            self.populate_offices_table()
         self.refresh()
 
     def clear_data(self):
@@ -580,6 +621,8 @@ class DashboardWidget(QWidget):
         self.delete_selected_btn.setEnabled(False)
         self.emp_table.setRowCount(0)
         self.attendance_table.setRowCount(0)
+        if hasattr(self, 'offices_table'):
+            self.offices_table.setRowCount(0)
 
     def reset_inactivity_timer(self):
         if self.user:
@@ -657,10 +700,13 @@ class DashboardWidget(QWidget):
 
         self.populate_attendance_table(records)
 
+        if self.user and self.user.get('role') == 'main_admin' and hasattr(self, 'offices_table'):
+            self.populate_offices_table()
+
         active_ids = {e['_id'] for e in employees if e.get('status') == 'active'}
         self.summary.setText(f'Active staff: {len(active_ids)}   |   Checked in today: {present_count}'
                              f'   |   Not checked in: {max(0, len(active_ids) - present_count)}'
-                             f'   |   Displayed records: {self.attendance_table.rowCount()}')
+                             f'   |   Displayed records: {len(records)}')
 
         try:
             from src.services.backup import BackupService
@@ -673,25 +719,123 @@ class DashboardWidget(QWidget):
 
     def populate_attendance_table(self, records):
         self.attendance_table.setRowCount(0)
+        self.attendance_table.clearSpans()
         search = self.search.text().strip().lower()
-        sorted_records = sorted(records, key=lambda r: (OFFICE_MAP.get(r.get('office_id'), {}).get('location', ''),
-                                                        r.get('office_id', ''), r.get('work_date', '')))
-        for record in sorted_records:
-            employee = self.employees.get(str(record['employee_id']), {})
+
+        filtered_records = []
+        for record in records:
+            employee = self.employees.get(str(record.get('employee_id')), {})
             name = employee.get('full_name', 'Archived employee')
             number = employee.get('employee_no', '')
             if search and search not in (name + ' ' + number).lower():
                 continue
-            office = OFFICE_MAP.get(record.get('office_id'), {})
-            values = [office.get('location', 'Unassigned'), office.get('name', 'Unassigned'), name, number,
-                      employee.get('job_title'), record.get('work_date'), local_time(record.get('clock_in_at')),
-                      local_time(record.get('clock_out_at')), record.get('minutes_worked'), record.get('status')]
-            rec_id = str(record.get('_id', ''))
-            self.add_row(self.attendance_table, values, record_id=rec_id)
+            filtered_records.append(record)
+
+        if not filtered_records:
+            return
+
+        from collections import defaultdict
+        grouped = defaultdict(list)
+        for record in filtered_records:
+            d = record.get('work_date') or 'Unscheduled'
+            grouped[d].append(record)
+
+        sorted_dates = sorted(grouped.keys(), reverse=True)
+
+        for date_idx, work_date in enumerate(sorted_dates):
+            date_records = grouped[work_date]
+            date_records.sort(key=lambda r: (
+                OFFICE_MAP.get(r.get('office_id'), {}).get('location', ''),
+                OFFICE_MAP.get(r.get('office_id'), {}).get('name', ''),
+                self.employees.get(str(r.get('employee_id')), {}).get('full_name', '')
+            ))
+
+            try:
+                dt = datetime.strptime(work_date, "%Y-%m-%d")
+                date_display = dt.strftime("%A, %d %B %Y  (%d/%m/%Y)")
+            except Exception:
+                date_display = work_date
+
+            present_count = sum(1 for r in date_records if r.get('clock_in_at'))
+            header_text = f"  Date: {date_display}    •    {len(date_records)} record(s)    •    {present_count} checked in"
+
+            # 1. Section Header Row for this Date
+            h_row = self.attendance_table.rowCount()
+            self.attendance_table.insertRow(h_row)
+            self.attendance_table.setRowHeight(h_row, 36)
+            self.attendance_table.setSpan(h_row, 0, 1, self.attendance_table.columnCount())
+
+            from src.ui.theme import ThemeManager
+            is_dark = ThemeManager.instance().is_dark
+            h_bg = QColor("#1e293b") if is_dark else QColor("#e0e7ff")
+            h_fg = QColor("#38bdf8") if is_dark else QColor("#1e3a8a")
+            gap_bg = QColor("#000000") if is_dark else QColor("#f3f4f6")
+
+            h_item = QTableWidgetItem(header_text)
+            h_item.setFlags(Qt.ItemIsEnabled)
+            h_item.setBackground(h_bg)
+            h_item.setForeground(h_fg)
+            h_font = QFont("Segoe UI", 11, QFont.Bold)
+            h_item.setFont(h_font)
+            self.attendance_table.setItem(h_row, 0, h_item)
+
+            for col in range(1, self.attendance_table.columnCount()):
+                dummy = QTableWidgetItem("")
+                dummy.setFlags(Qt.NoItemFlags)
+                dummy.setBackground(h_bg)
+                self.attendance_table.setItem(h_row, col, dummy)
+
+            # 2. Staff Attendance Rows for this Date
+            for record in date_records:
+                employee = self.employees.get(str(record.get('employee_id')), {})
+                name = employee.get('full_name', 'Archived employee')
+                number = employee.get('employee_no', '')
+                office = OFFICE_MAP.get(record.get('office_id'), {})
+                values = [
+                    office.get('location', 'Unassigned'),
+                    office.get('name', 'Unassigned'),
+                    name,
+                    number,
+                    employee.get('job_title', ''),
+                    record.get('work_date', ''),
+                    local_time(record.get('clock_in_at')),
+                    local_time(record.get('clock_out_at')),
+                    record.get('status', '')
+                ]
+                rec_id = str(record.get('_id', ''))
+                self.add_row(self.attendance_table, values, record_id=rec_id)
+                curr_row = self.attendance_table.rowCount() - 1
+                self.attendance_table.setRowHeight(curr_row, 30)
+
+            # 3. Gap / Spacer Row after each Date group (except the last date)
+            if date_idx < len(sorted_dates) - 1:
+                gap_row = self.attendance_table.rowCount()
+                self.attendance_table.insertRow(gap_row)
+                self.attendance_table.setRowHeight(gap_row, 16)
+                self.attendance_table.setSpan(gap_row, 0, 1, self.attendance_table.columnCount())
+
+                gap_item = QTableWidgetItem("")
+                gap_item.setFlags(Qt.NoItemFlags)
+                gap_item.setBackground(gap_bg)
+                self.attendance_table.setItem(gap_row, 0, gap_item)
+                for col in range(1, self.attendance_table.columnCount()):
+                    d_gap = QTableWidgetItem("")
+                    d_gap.setFlags(Qt.NoItemFlags)
+                    d_gap.setBackground(gap_bg)
+                    self.attendance_table.setItem(gap_row, col, d_gap)
 
     def apply_search_filter(self):
         if hasattr(self, 'cached_records'):
             self.populate_attendance_table(self.cached_records)
+
+    def on_theme_changed(self, is_dark):
+        try:
+            import shiboken6
+            if not shiboken6.isValid(self) or not shiboken6.isValid(self.attendance_table):
+                return
+            self.apply_search_filter()
+        except Exception:
+            pass
 
     def on_load_failed(self, error_msg):
         self.employees = {}
@@ -758,25 +902,273 @@ class DashboardWidget(QWidget):
         QMessageBox.warning(self, 'Could not deactivate', error_msg)
 
     def export_reports(self):
-        path, _ = QFileDialog.getSaveFileName(self, 'Export sheet', 'Attendance.csv', 'CSV (*.csv)')
+        default_name = f"Attendance_Report_{self.from_date.date().toString('yyyyMMdd')}_{self.to_date.date().toString('yyyyMMdd')}.xlsx"
+        path, selected_filter = QFileDialog.getSaveFileName(
+            self, 'Export sheet', default_name, 'Excel Workbook (*.xlsx);;CSV File (*.csv)'
+        )
         if not path:
             return
         try:
-            with open(path, 'w', newline='', encoding='utf-8-sig') as handle:
-                writer = csv.writer(handle)
-                table = self.attendance_table
-                writer.writerow([table.horizontalHeaderItem(c).text() for c in range(table.columnCount())])
-                for row in range(table.rowCount()):
-                    writer.writerow([csv_safe(table.item(row, col).text()) for col in range(table.columnCount())])
-            QMessageBox.information(self, 'Export complete', path)
-        except OSError as exc:
-            QMessageBox.warning(self, 'Export failed', str(exc))
+            if path.lower().endswith('.xlsx') or ('xlsx' in selected_filter.lower() and not path.lower().endswith('.csv')):
+                if not path.lower().endswith('.xlsx'):
+                    path += '.xlsx'
+                self._export_to_excel(path)
+            else:
+                self._export_to_csv(path)
+            QMessageBox.information(self, 'Export Complete', f'Attendance records successfully exported to:\n\n{path}')
+        except Exception as exc:
+            QMessageBox.warning(self, 'Export Failed', str(exc))
+
+    def _export_to_excel(self, path):
+        import openpyxl
+        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+        from openpyxl.utils import get_column_letter
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Attendance Sheet"
+        ws.views.sheetView[0].showGridLines = True
+
+        table = self.attendance_table
+        col_count = table.columnCount()
+        headers = [table.horizontalHeaderItem(c).text() for c in range(col_count)]
+
+        end_col = get_column_letter(max(1, col_count))
+        ws.merge_cells(f"A1:{end_col}1")
+        title_cell = ws["A1"]
+        title_cell.value = "RANDAFRAMES ATTENDANCE REPORT"
+        title_cell.font = Font(name="Arial", size=15, bold=True, color="FFFFFF")
+        title_cell.fill = PatternFill(start_color="1E293B", end_color="1E293B", fill_type="solid")
+        title_cell.alignment = Alignment(horizontal="center", vertical="center")
+        ws.row_dimensions[1].height = 34
+
+        office_name = self.office_filter.currentText() if hasattr(self, 'office_filter') else "All Offices"
+        loc_name = self.location_filter.currentText() if hasattr(self, 'location_filter') else "All Locations"
+        from_str = self.from_date.date().toString("yyyy-MM-dd")
+        to_str = self.to_date.date().toString("yyyy-MM-dd")
+        exported_at = datetime.now(LAGOS).strftime("%Y-%m-%d %H:%M:%S")
+
+        meta_info = f"Office: {office_name}   |   Location: {loc_name}   |   Period: {from_str} to {to_str}   |   Generated: {exported_at}"
+        ws.merge_cells(f"A2:{end_col}2")
+        meta_cell = ws["A2"]
+        meta_cell.value = meta_info
+        meta_cell.font = Font(name="Arial", size=9, italic=True, color="475569")
+        meta_cell.alignment = Alignment(horizontal="center", vertical="center")
+        ws.row_dimensions[2].height = 20
+        ws.row_dimensions[3].height = 8
+
+        header_row = 4
+        ws.row_dimensions[header_row].height = 26
+        header_fill = PatternFill(start_color="334155", end_color="334155", fill_type="solid")
+        header_font = Font(name="Arial", size=11, bold=True, color="FFFFFF")
+        thin_border = Border(
+            left=Side(style="thin", color="CBD5E1"),
+            right=Side(style="thin", color="CBD5E1"),
+            top=Side(style="thin", color="CBD5E1"),
+            bottom=Side(style="thin", color="CBD5E1")
+        )
+
+        for col_idx, header_text in enumerate(headers, start=1):
+            cell = ws.cell(row=header_row, column=col_idx, value=header_text)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+            cell.border = thin_border
+
+        zebra_fill = PatternFill(start_color="F8FAFC", end_color="F8FAFC", fill_type="solid")
+        white_fill = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid")
+        data_font = Font(name="Arial", size=10)
+
+        status_col_idx = None
+        for i, h in enumerate(headers, 1):
+            if "status" in h.lower():
+                status_col_idx = i
+
+        present_fill = PatternFill(start_color="DCFCE7", end_color="DCFCE7", fill_type="solid")
+        present_font = Font(name="Arial", size=10, bold=True, color="166534")
+
+        absent_fill = PatternFill(start_color="FEE2E2", end_color="FEE2E2", fill_type="solid")
+        absent_font = Font(name="Arial", size=10, bold=True, color="991B1B")
+
+        date_banner_fill = PatternFill(start_color="1E293B", end_color="1E293B", fill_type="solid")
+        date_banner_font = Font(name="Arial", size=11, bold=True, color="38BDF8")
+        date_banner_border = Border(
+            left=Side(style="thin", color="334155"),
+            right=Side(style="thin", color="334155"),
+            top=Side(style="medium", color="0284C7"),
+            bottom=Side(style="medium", color="0284C7")
+        )
+
+        excel_row = header_row
+        for row_idx in range(table.rowCount()):
+            if table.columnSpan(row_idx, 0) > 1:
+                item0 = table.item(row_idx, 0)
+                text0 = item0.text().strip() if item0 else ""
+                excel_row += 1
+                if text0:
+                    ws.merge_cells(f"A{excel_row}:{end_col}{excel_row}")
+                    cell = ws.cell(row=excel_row, column=1)
+                    cell.value = f"   {text0}"
+                    cell.font = date_banner_font
+                    cell.fill = date_banner_fill
+                    cell.alignment = Alignment(horizontal="left", vertical="center")
+                    ws.row_dimensions[excel_row].height = 24
+                    for c_idx in range(1, col_count + 1):
+                        ws.cell(row=excel_row, column=c_idx).border = date_banner_border
+                else:
+                    ws.merge_cells(f"A{excel_row}:{end_col}{excel_row}")
+                    ws.row_dimensions[excel_row].height = 10
+                continue
+
+            excel_row += 1
+            ws.row_dimensions[excel_row].height = 20
+            row_fill = zebra_fill if (excel_row % 2 == 1) else white_fill
+
+            for col_idx in range(1, col_count + 1):
+                raw_item = table.item(row_idx, col_idx - 1)
+                val = raw_item.text().strip() if raw_item else ""
+                cell = ws.cell(row=excel_row, column=col_idx)
+
+                cell.value = val
+                if col_idx in (1, 2, 3, 5):
+                    cell.alignment = Alignment(horizontal="left", vertical="center")
+                else:
+                    cell.alignment = Alignment(horizontal="center", vertical="center")
+
+                cell.font = data_font
+                cell.fill = row_fill
+                cell.border = thin_border
+
+                if col_idx == status_col_idx:
+                    status_lower = val.lower()
+                    if "present" in status_lower:
+                        cell.fill = present_fill
+                        cell.font = present_font
+                    elif "absent" in status_lower or "not checked" in status_lower:
+                        cell.fill = absent_fill
+                        cell.font = absent_font
+
+        for col_idx in range(1, col_count + 1):
+            max_len = len(headers[col_idx - 1])
+            for r in range(header_row + 1, excel_row + 1):
+                val_str = str(ws.cell(row=r, column=col_idx).value or "")
+                if len(val_str) > max_len:
+                    max_len = len(val_str)
+            col_letter = get_column_letter(col_idx)
+            ws.column_dimensions[col_letter].width = max(13, min(max_len + 4, 38))
+
+        ws.freeze_panes = f"A{header_row + 1}"
+        wb.save(path)
+
+    def _export_to_csv(self, path):
+        with open(path, 'w', newline='', encoding='utf-8-sig') as handle:
+            writer = csv.writer(handle)
+            table = self.attendance_table
+            writer.writerow([table.horizontalHeaderItem(c).text() for c in range(table.columnCount())])
+            for row in range(table.rowCount()):
+                if table.columnSpan(row, 0) > 1:
+                    item0 = table.item(row, 0)
+                    text0 = item0.text().strip() if item0 else ""
+                    if text0:
+                        writer.writerow([text0] + [''] * (table.columnCount() - 1))
+                    else:
+                        writer.writerow([])
+                    continue
+                writer.writerow([csv_safe(table.item(row, col).text() if table.item(row, col) else '') for col in range(table.columnCount())])
 
     def open_backups_folder(self):
         from src.services.backup import BackupService
         service = BackupService()
         if not service.open_backup_folder():
             QMessageBox.information(self, 'Backups Location', f'Your daily SQLite backups are saved in:\n\n{service.backup_dir}')
+
+    def populate_offices_table(self):
+        if not hasattr(self, 'offices_table'):
+            return
+        from src.offices import OFFICES, sync_offices
+        try:
+            db_offices = list(ClientDatabase.get_db().offices.find({}))
+            sync_offices(db_offices)
+        except Exception:
+            pass
+
+        self.offices_table.setRowCount(0)
+        for office in sorted(OFFICES, key=lambda o: (o.get('location', ''), o.get('name', ''))):
+            oid = office.get('_id', '')
+            name = office.get('name', '')
+            loc = office.get('location', '')
+            admin_user = office.get('username') or oid
+            if self.employees:
+                staff_count = sum(1 for e in self.employees.values() if e.get('office_id') == oid)
+            else:
+                try:
+                    staff_count = ClientDatabase.get_db().employees.count_documents({'office_id': oid})
+                except Exception:
+                    staff_count = 0
+            values = [loc, name, oid, admin_user, "Active", str(staff_count)]
+            self.add_row(self.offices_table, values, record_id=oid)
+
+    def open_add_office(self):
+        from src.ui.add_office import AddOfficeDialog
+        dialog = AddOfficeDialog(self)
+        if dialog.exec():
+            self._update_office_combos()
+            self.populate_offices_table()
+            self.refresh()
+
+    def _update_office_combos(self):
+        from src.offices import OFFICES
+        curr_loc = self.location_filter.currentData()
+        curr_off = self.office_filter.currentData()
+        self.location_filter.blockSignals(True)
+        self.office_filter.blockSignals(True)
+
+        self.location_filter.clear()
+        self.location_filter.addItem('All locations', '')
+        for loc in sorted({o['location'] for o in OFFICES if o.get('location')}):
+            self.location_filter.addItem(loc, loc)
+
+        self.office_filter.clear()
+        self.office_filter.addItem('All offices', '')
+        for o in OFFICES:
+            self.office_filter.addItem(o['name'], o['_id'])
+
+        idx_l = self.location_filter.findData(curr_loc)
+        if idx_l >= 0:
+            self.location_filter.setCurrentIndex(idx_l)
+        idx_o = self.office_filter.findData(curr_off)
+        if idx_o >= 0:
+            self.office_filter.setCurrentIndex(idx_o)
+
+        self.location_filter.blockSignals(False)
+        self.office_filter.blockSignals(False)
+
+    def reset_selected_office_password(self):
+        row = self.offices_table.currentRow()
+        if row < 0:
+            return self.reset_office_password()
+
+        item0 = self.offices_table.item(row, 0)
+        office_id = item0.data(Qt.UserRole) if item0 else None
+        if not office_id and self.offices_table.item(row, 2):
+            office_id = self.offices_table.item(row, 2).text().strip()
+
+        office_name = self.offices_table.item(row, 1).text() if self.offices_table.item(row, 1) else (office_id or "Selected Office")
+        if not office_id:
+            return self.reset_office_password()
+
+        if QMessageBox.question(
+            self,
+            'Reset Office Password',
+            f'This will generate a new temporary password for "{office_name}" and sign out all of its active terminals.\n\nContinue?'
+        ) != QMessageBox.Yes:
+            return
+
+        self.summary.setText(f'Resetting password for {office_name}...')
+        self.reset_worker = PasswordResetWorker(office_id, office_name)
+        self.reset_worker.reset_success.connect(self.on_reset_success)
+        self.reset_worker.reset_failed.connect(self.on_reset_failed)
+        self.reset_worker.start()
 
     def reset_office_password(self):
         office = self.office_filter.currentData()
@@ -815,8 +1207,14 @@ class DashboardWidget(QWidget):
         QMessageBox.warning(self, 'Reset Failed', error_msg)
 
     def change_password(self):
-        password, ok = QInputDialog.getText(self, 'Change password', 'At least 10 characters, letters, numbers and !@#$%&*?', QLineEdit.Password)
-        if ok and password:
+        from src.ui.login import ChangePasswordDialog
+        dialog = ChangePasswordDialog(
+            title="Change Password",
+            message="Set new password (at least 10 characters with letters, numbers, and symbols):",
+            parent=self
+        )
+        if dialog.exec() == QDialog.Accepted and dialog.get_password():
+            password = dialog.get_password()
             self.summary.setText('Updating your password...')
             self.pw_worker = PasswordChangeWorker(password)
             self.pw_worker.change_success.connect(self.on_change_password_success)
@@ -834,13 +1232,18 @@ class DashboardWidget(QWidget):
     def on_attendance_selection_changed(self):
         is_master = bool(self.user and self.user.get('role') == 'main_admin')
         has_sel = bool(self.attendance_table.selectionModel() and self.attendance_table.selectionModel().hasSelection())
-        self.delete_selected_btn.setEnabled(is_master and has_sel)
+        if has_sel and is_master:
+            row = self.attendance_table.currentRow()
+            if row >= 0 and self.attendance_table.columnSpan(row, 0) == 1:
+                self.delete_selected_btn.setEnabled(True)
+                return
+        self.delete_selected_btn.setEnabled(False)
 
     def delete_selected_log(self):
         if not self.user or self.user.get('role') != 'main_admin':
             return
         row = self.attendance_table.currentRow()
-        if row < 0:
+        if row < 0 or self.attendance_table.columnSpan(row, 0) > 1:
             QMessageBox.information(self, 'Select Log', 'Select an attendance record from the table first.')
             return
 
@@ -852,6 +1255,16 @@ class DashboardWidget(QWidget):
         emp_no = self.attendance_table.item(row, 3).text() if self.attendance_table.item(row, 3) else ''
         work_date = self.attendance_table.item(row, 5).text() if self.attendance_table.item(row, 5) else ''
         time_in = self.attendance_table.item(row, 6).text() if self.attendance_table.item(row, 6) else ''
+
+        emp_id = None
+        for eid, edata in self.employees.items():
+            if edata.get('employee_no') == emp_no or edata.get('full_name') == staff_name:
+                emp_id = eid
+                break
+
+        if not record_id and not (emp_id and work_date):
+            QMessageBox.information(self, 'Select Log', 'Select an attendance record from the table first.')
+            return
 
         msg = (f"Are you sure you want to permanently delete this attendance record?\n\n"
                f"• Staff: {staff_name} ({emp_no})\n"
@@ -867,14 +1280,8 @@ class DashboardWidget(QWidget):
         self.delete_selected_btn.setEnabled(False)
         self.summary.setText(f"Deleting record for {staff_name} on {work_date}...")
 
-        emp_id = None
-        for eid, edata in self.employees.items():
-            if edata.get('employee_no') == emp_no or edata.get('full_name') == staff_name:
-                emp_id = eid
-                break
-
         self.del_worker = DeleteAttendanceWorker(
-            record_id=record_id,
+            record_id=record_id or None,
             employee_id=emp_id if not record_id else None,
             work_date=work_date if not record_id else None
         )
@@ -899,7 +1306,7 @@ class DashboardWidget(QWidget):
 
     def on_delete_history_success(self, count):
         self.delete_history_btn.setEnabled(True)
-        self.delete_history_btn.setText("Batch Delete History...")
+        self.delete_history_btn.setText("Delete History...")
         self.on_attendance_selection_changed()
         self.summary.setText(f"Deleted {count} record(s).")
         QMessageBox.information(self, "Success", f"Successfully deleted {count} attendance record(s).")
@@ -907,7 +1314,7 @@ class DashboardWidget(QWidget):
 
     def on_delete_history_error(self, err_msg):
         self.delete_history_btn.setEnabled(True)
-        self.delete_history_btn.setText("Batch Delete History...")
+        self.delete_history_btn.setText("Delete History...")
         self.on_attendance_selection_changed()
         self.summary.setText("Attendance deletion failed.")
         QMessageBox.critical(self, "Deletion Failed", err_msg)

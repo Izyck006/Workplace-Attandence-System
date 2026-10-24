@@ -37,19 +37,42 @@ def apply_window_icon(window):
                 pass
 
 
-def play_audio_file(file_path: str):
-    """Play an mp3/wav audio file asynchronously using native Windows winmm."""
-    if sys.platform != "win32" or not os.path.exists(file_path):
+def play_audio_file(file_path: str) -> bool:
+    """Play an audio file reliably on Windows using WScript/WMPlayer, with timeout and error checking."""
+    if sys.platform != "win32" or not file_path or not os.path.exists(file_path):
         return False
     try:
-        import time
-        winmm = ctypes.windll.winmm
-        alias = f"rf_{os.getpid()}_{int(time.time() * 1000) % 100000}"
+        import tempfile
+        import subprocess
         abs_path = os.path.abspath(file_path)
-        winmm.mciSendStringW(f'open "{abs_path}" type mpegvideo alias {alias}', None, 0, None)
-        winmm.mciSendStringW(f'play {alias} wait', None, 0, None)
-        winmm.mciSendStringW(f'close {alias}', None, 0, None)
-        return True
+        safe_path = abs_path.replace('"', '""')
+        vbs_content = (
+            'On Error Resume Next\n'
+            'Set p = CreateObject("WMPlayer.OCX")\n'
+            'p.settings.volume = 100\n'
+            f'p.URL = "{safe_path}"\n'
+            'p.Controls.play\n'
+            't = 0\n'
+            'Do While (p.playState <> 3 And p.playState <> 1 And p.playState <> 8) And t < 30\n'
+            '    WScript.Sleep 100\n'
+            '    t = t + 1\n'
+            'Loop\n'
+            'Do While (p.playState = 3 Or p.playState = 9 Or p.playState = 6) And t < 120\n'
+            '    WScript.Sleep 100\n'
+            '    t = t + 1\n'
+            'Loop\n'
+        )
+        f = tempfile.NamedTemporaryFile(suffix='.vbs', delete=False, mode='w', encoding='utf-8')
+        f.write(vbs_content)
+        f.close()
+        flags = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
+        res = subprocess.run(["wscript", f.name], creationflags=flags, timeout=10)
+        try:
+            if os.path.exists(f.name):
+                os.unlink(f.name)
+        except Exception:
+            pass
+        return res.returncode == 0
     except Exception:
         return False
 

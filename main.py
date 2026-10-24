@@ -18,7 +18,9 @@ class MainWindow(QMainWindow):
         apply_window_icon(self)
         self.scanner_provider = KojackVendorProvider()
         self.scanner_provider.initialize()
+        self.setObjectName('mainWindow')
         self.stacked_widget = QStackedWidget()
+        self.stacked_widget.setObjectName('centralStacked')
         self.setCentralWidget(self.stacked_widget)
         self.login_view = LoginWidget()
         self.dashboard_view = DashboardWidget(self.scanner_provider)
@@ -81,6 +83,8 @@ def main():
         pass
     app = QApplication(sys.argv)
     app.setWindowIcon(QIcon(get_asset_path('icon.ico')))
+    from src.ui.theme import ThemeManager
+    ThemeManager.instance().apply(app)
     window = MainWindow()
     window.show()
     sys.exit(app.exec())

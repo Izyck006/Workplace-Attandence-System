@@ -22,6 +22,9 @@ IBSU_IMAGE_TYPE_FLAT_TWO_FINGERS = 3
 IBSU_IMAGE_TYPE_FLAT_FOUR_FINGERS = 4
 IBSU_IMAGE_RESOLUTION_500 = 500
 
+IBSU_OPTION_AUTO_CONTRAST = 1
+IBSU_OPTION_AUTO_CAPTURE = 2
+
 class IBSU_ImageData(ctypes.Structure):
     _fields_ = [
         ("Buffer", ctypes.c_void_p),
@@ -170,7 +173,7 @@ class KojackScanner:
         
         target_type = self.get_supported_image_type(image_type)
         
-        status = self._dll.IBSU_BeginCaptureImage(self._handle, target_type, 500, 3)
+        status = self._dll.IBSU_BeginCaptureImage(self._handle, target_type, 500, IBSU_OPTION_AUTO_CONTRAST)
         if status != IBSU_STATUS_OK and status not in (IBSU_ERR_CAPTURE_STILL_RUNNING, -205): 
             print(f"Failed to begin capture: {status} (type: {target_type})")
             logger.error(f"Failed to begin capture: {status} (type: {target_type})")

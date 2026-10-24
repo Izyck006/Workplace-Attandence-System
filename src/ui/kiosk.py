@@ -30,6 +30,8 @@ class KioskWidget(QWidget):
 
     def __init__(self, scanner_provider, parent=None):
         super().__init__(parent)
+        self.setObjectName("kioskWidget")
+        self.setAttribute(Qt.WA_StyledBackground, True)
         self.scanner_provider = scanner_provider
         self.worker = None
         self.scan_worker = None
@@ -55,12 +57,16 @@ class KioskWidget(QWidget):
         title = QLabel("Randaframes Attendance Terminal")
         title.setFont(QFont("Arial", 20, QFont.Bold))
 
+        from src.ui.theme import ThemeToggleButton
+        self.theme_btn = ThemeToggleButton()
+
         admin_btn = QPushButton("Admin Login")
         admin_btn.setFixedSize(160, 38)
         admin_btn.clicked.connect(self.login_requested.emit)
 
         top_layout.addWidget(title)
         top_layout.addStretch()
+        top_layout.addWidget(self.theme_btn)
         top_layout.addWidget(admin_btn)
         reconnect = QPushButton("Reconnect scanner")
         reconnect.clicked.connect(self.reconnect_scanner)
@@ -69,22 +75,33 @@ class KioskWidget(QWidget):
         main_layout.addLayout(top_layout)
 
         action_layout = QHBoxLayout()
+        action_layout.setSpacing(12)
         action_label = QLabel("Select Action:")
-        action_label.setFont(QFont("Arial", 16, QFont.Bold))
+        action_label.setFont(QFont("Arial", 15, QFont.Bold))
 
         self.action_group = QButtonGroup(self)
+        self.action_group.setExclusive(True)
 
-        self.radio_in = QRadioButton("Time In")
-        self.radio_in.setFont(QFont("Arial", 16))
-        self.radio_in.setStyleSheet("spacing: 10px; margin-right: 20px;")
+        self.radio_in = QPushButton("Time In")
+        self.radio_in.setCheckable(True)
         self.radio_in.setChecked(True)
+        self.radio_in.setCursor(Qt.PointingHandCursor)
+        self.radio_in.setFixedSize(130, 40)
+        self.radio_in.setFont(QFont("Arial", 13, QFont.Bold))
 
-        self.radio_out = QRadioButton("Time Out")
-        self.radio_out.setFont(QFont("Arial", 16))
-        self.radio_out.setStyleSheet("spacing: 10px;")
+        self.radio_out = QPushButton("Time Out")
+        self.radio_out.setCheckable(True)
+        self.radio_out.setCursor(Qt.PointingHandCursor)
+        self.radio_out.setFixedSize(130, 40)
+        self.radio_out.setFont(QFont("Arial", 13, QFont.Bold))
 
         self.action_group.addButton(self.radio_in)
         self.action_group.addButton(self.radio_out)
+
+        self._update_action_button_styles()
+        self.radio_in.toggled.connect(self._update_action_button_styles)
+        self.radio_out.toggled.connect(self._update_action_button_styles)
+        self.theme_btn.theme_mgr.theme_changed.connect(self.on_theme_changed)
 
         action_layout.addStretch()
         action_layout.addWidget(action_label)
@@ -94,7 +111,7 @@ class KioskWidget(QWidget):
 
         main_layout.addLayout(action_layout)
 
-        self.status_label = QLabel("Please place your finger on the scanner.")
+        self.status_label = QLabel("Place finger flat on scanner and hold steady (3s)...")
         self.status_label.setFont(QFont("Arial", 16, QFont.Bold))
         self.status_label.setAlignment(Qt.AlignCenter)
         self.status_label.setStyleSheet("color: #0078D7; margin: 10px 0;")
@@ -108,7 +125,7 @@ class KioskWidget(QWidget):
 
         content_layout = QHBoxLayout()
 
-        left_group = QGroupBox("Place your finger on the scanner")
+        left_group = QGroupBox("Fingerprint Scanner")
         left_layout = QVBoxLayout(left_group)
 
         self.preview_label = QLabel()
@@ -117,7 +134,7 @@ class KioskWidget(QWidget):
         self.preview_label.setMinimumSize(400, 400)
         self.preview_label.setScaledContents(False)
 
-        instruction = QLabel("Please place finger on the scanner platen.")
+        instruction = QLabel("Place finger flat on the scanner platen and hold for 3 seconds.")
         instruction.setAlignment(Qt.AlignCenter)
 
         left_layout.addWidget(self.preview_label)
@@ -185,6 +202,74 @@ class KioskWidget(QWidget):
         main_layout.addLayout(content_layout)
         main_layout.addStretch()
 
+    def on_theme_changed(self, is_dark: bool):
+        self._update_action_button_styles()
+
+    def _update_action_button_styles(self):
+        try:
+            import shiboken6
+            if not shiboken6.isValid(self) or not hasattr(self, 'radio_in') or not shiboken6.isValid(self.radio_in):
+                return
+        except Exception:
+            return
+
+        is_dark = self.theme_btn.theme_mgr.is_dark if hasattr(self, 'theme_btn') else True
+        selected_style = """
+            QPushButton {
+                background-color: #2563eb;
+                color: #ffffff;
+                border: 2px solid #3b82f6;
+                border-radius: 8px;
+                padding: 6px 16px;
+                font-weight: bold;
+                font-size: 13px;
+            }
+            QPushButton:hover {
+                background-color: #1d4ed8;
+            }
+        """
+        if is_dark:
+            unselected_style = """
+                QPushButton {
+                    background-color: #18181b;
+                    color: #a1a1aa;
+                    border: 1px solid #3f3f46;
+                    border-radius: 8px;
+                    padding: 6px 16px;
+                    font-weight: 500;
+                    font-size: 13px;
+                }
+                QPushButton:hover {
+                    background-color: #27272a;
+                    color: #ffffff;
+                    border-color: #52525b;
+                }
+            """
+        else:
+            unselected_style = """
+                QPushButton {
+                    background-color: #ffffff;
+                    color: #4b5563;
+                    border: 1px solid #cbd5e1;
+                    border-radius: 8px;
+                    padding: 6px 16px;
+                    font-weight: 500;
+                    font-size: 13px;
+                }
+                QPushButton:hover {
+                    background-color: #f1f5f9;
+                    color: #111827;
+                    border-color: #94a3b8;
+                }
+            """
+
+        if self.radio_in.isChecked():
+            self.radio_in.setStyleSheet(selected_style)
+            self.radio_out.setStyleSheet(unselected_style)
+        else:
+            self.radio_in.setStyleSheet(unselected_style)
+            self.radio_out.setStyleSheet(selected_style)
+
     def showEvent(self, event):
         super().showEvent(event)
         speak("Welcome to Randaframes Attendance System.")
@@ -232,7 +317,7 @@ class KioskWidget(QWidget):
 
     def update_status(self, msg):
         self.status_label.setStyleSheet("color: #0078D7; margin: 10px 0;")
-        self.status_label.setText(f"Scanner Status: {msg}")
+        self.status_label.setText(msg)
 
     def update_error(self, msg):
         self.status_label.setStyleSheet("color: red; margin: 10px 0; font-weight: bold;")
@@ -270,7 +355,7 @@ class KioskWidget(QWidget):
         self.photo_label.setText("No Photo")
         self.photo_label.setPixmap(QPixmap())
         self.status_label.setStyleSheet("color: #0078D7; margin: 10px 0;")
-        self.status_label.setText("Please place your finger on the scanner.")
+        self.status_label.setText("Place finger flat on scanner and hold steady (3s)...")
         self.start_scanner()
 
     def process_scan(self, template_data):
