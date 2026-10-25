@@ -493,6 +493,44 @@ def create_office(body: CreateOfficeBody, user=Depends(master), db=Depends(get_d
     }
 
 
+@app.post("/offices/{office_id}/delete")
+def delete_office(office_id: str, user=Depends(master), db=Depends(get_db)):
+    from src.offices import CORE_OFFICE_IDS, unregister_office
+    if office_id in CORE_OFFICE_IDS:
+        raise HTTPException(400, "Core default offices are protected and cannot be deleted.")
+
+    check_q = {"_id": office_id}
+    if user.get("organization_id"):
+        check_q["organization_id"] = user["organization_id"]
+    office = db.offices.find_one(check_q)
+    if not office:
+        raise HTTPException(404, "Office not found.")
+
+    emp_q = {"office_id": office_id, "status": "active"}
+    if user.get("organization_id"):
+        emp_q["organization_id"] = user["organization_id"]
+    active_staff = db.employees.count_documents(emp_q)
+    if active_staff > 0:
+        raise HTTPException(400, f"Cannot delete office while it has {active_staff} active employee(s). Please reassign or deactivate staff members first.")
+
+    db.offices.delete_one(check_q)
+    unregister_office(office_id)
+
+    user_q = {"office_id": office_id, "role": "office_admin"}
+    if user.get("organization_id"):
+        user_q["organization_id"] = user["organization_id"]
+    for admin_user in db.users.find(user_q):
+        db.sessions.delete_many({"user_id": admin_user["_id"]})
+    db.users.delete_many(user_q)
+
+    audit(db, user, "office_deleted", office_id)
+    return {
+        "ok": True,
+        "office_id": office_id,
+        "message": f"Office '{office.get('name', office_id)}' deleted successfully."
+    }
+
+
 class DeleteAttendanceBody(BaseModel):
     record_id: str | None = None
     employee_id: str | None = None

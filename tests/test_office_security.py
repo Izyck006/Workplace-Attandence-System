@@ -243,3 +243,68 @@ def test_attendance_deletion_authorization_and_audit(system):
     # 6. Check audit trail
     assert db.audit_events.count_documents({'action': 'attendance_deleted'}) == 3
 
+
+def test_delete_office_feature(system):
+    client, db, kano, abuja = system
+    master_headers = auth(client, 'master')
+    kano_headers = auth(client, 'kano')
+
+    # 1. Non-master admin cannot delete office (403)
+    assert client.post('/offices/engineering-kano/delete', headers=kano_headers).status_code == 403
+
+    # 2. Core default office cannot be deleted (400)
+    res_core = client.post('/offices/engineering-kano/delete', headers=master_headers)
+    assert res_core.status_code == 400
+    assert "protected" in res_core.json()['detail'].lower()
+
+    # 3. Create a custom branch office
+    res_create = client.post('/offices/create', headers=master_headers, json={
+        'name': 'Branch Zaria',
+        'location': 'Zaria',
+        'office_id': 'branch-zaria',
+        'username': 'admin-zaria',
+        'password': 'ZariaPassword123!'
+    })
+    assert res_create.status_code == 200
+
+    # 4. If active staff are assigned, deletion is blocked (400)
+    db.employees.insert_one({
+        'employee_no': 'Z1',
+        'full_name': 'Zaria Staff',
+        'office_id': 'branch-zaria',
+        'status': 'active'
+    })
+    res_blocked = client.post('/offices/branch-zaria/delete', headers=master_headers)
+    assert res_blocked.status_code == 400
+    assert "active employee" in res_blocked.json()['detail'].lower()
+
+    # Deactivate or remove employee
+    db.employees.update_one({'employee_no': 'Z1'}, {'$set': {'status': 'inactive'}})
+
+    # Insert historical attendance record
+    db.attendance_records.insert_one({
+        'office_id': 'branch-zaria',
+        'work_date': '2026-06-01',
+        'status': 'present'
+    })
+
+    # 5. Delete custom office with no active staff (200)
+    res_del = client.post('/offices/branch-zaria/delete', headers=master_headers)
+    assert res_del.status_code == 200
+    assert res_del.json()['ok'] is True
+
+    # 6. Verify office is removed from db.offices
+    assert db.offices.find_one({'_id': 'branch-zaria'}) is None
+
+    # 7. Verify admin account is revoked
+    assert db.users.find_one({'username': 'admin-zaria'}) is None
+
+    # 8. Verify historical attendance record is PRESERVED
+    hist_record = db.attendance_records.find_one({'office_id': 'branch-zaria'})
+    assert hist_record is not None
+    assert hist_record['work_date'] == '2026-06-01'
+
+    # 9. Verify audit event
+    assert db.audit_events.find_one({'action': 'office_deleted', 'target': 'branch-zaria'}) is not None
+
+

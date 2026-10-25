@@ -498,6 +498,27 @@ class DashboardWidget(QWidget):
         self.reset_office_pw_btn.clicked.connect(self.reset_selected_office_password)
         office_actions.addWidget(self.reset_office_pw_btn)
 
+        self.delete_office_btn = QPushButton('Delete Office')
+        self.delete_office_btn.setFixedHeight(34)
+        self.delete_office_btn.setToolTip('Delete the selected branch office and revoke its admin credentials (core offices are protected)')
+        self.delete_office_btn.setStyleSheet("""
+            QPushButton {
+                background-color: transparent;
+                color: #ef4444;
+                border: 1px solid #ef4444;
+                border-radius: 6px;
+                font-size: 13px;
+                font-weight: 500;
+                padding: 0 14px;
+            }
+            QPushButton:hover {
+                background-color: #ef4444;
+                color: #ffffff;
+            }
+        """)
+        self.delete_office_btn.clicked.connect(self.delete_selected_office)
+        office_actions.addWidget(self.delete_office_btn)
+
         self.refresh_offices_btn = QPushButton('Refresh')
         self.refresh_offices_btn.setFixedHeight(34)
         self.refresh_offices_btn.clicked.connect(self.populate_offices_table)
@@ -1169,6 +1190,74 @@ class DashboardWidget(QWidget):
         self.reset_worker.reset_success.connect(self.on_reset_success)
         self.reset_worker.reset_failed.connect(self.on_reset_failed)
         self.reset_worker.start()
+
+    def delete_selected_office(self):
+        row = self.offices_table.currentRow()
+        if row < 0:
+            QMessageBox.warning(self, "No Office Selected", "Please select an office row from the table to delete.")
+            return
+
+        item0 = self.offices_table.item(row, 0)
+        office_id = item0.data(Qt.UserRole) if item0 else None
+        if not office_id and self.offices_table.item(row, 2):
+            office_id = self.offices_table.item(row, 2).text().strip()
+
+        office_name = self.offices_table.item(row, 1).text() if self.offices_table.item(row, 1) else (office_id or "Selected Office")
+        if not office_id:
+            QMessageBox.warning(self, "Error", "Could not determine the selected office ID.")
+            return
+
+        from src.offices import CORE_OFFICE_IDS
+        if office_id in CORE_OFFICE_IDS:
+            QMessageBox.warning(
+                self,
+                "Protected Office",
+                f"The core default office '{office_name}' is protected and cannot be deleted."
+            )
+            return
+
+        staff_item = self.offices_table.item(row, 5)
+        staff_count = 0
+        if staff_item:
+            try:
+                staff_count = int(staff_item.text().strip())
+            except ValueError:
+                staff_count = 0
+
+        if staff_count > 0:
+            QMessageBox.warning(
+                self,
+                "Cannot Delete Office",
+                f"Office '{office_name}' currently has {staff_count} active employee(s) assigned.\n\n"
+                f"Please reassign or deactivate the staff members before deleting this office."
+            )
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "Confirm Delete Office",
+            f"Are you sure you want to delete office '{office_name}' ({office_id})?\n\n"
+            f"• The office will be removed from all active dropdowns.\n"
+            f"• Its administrator credentials will be revoked immediately.\n"
+            f"• All past attendance records remain preserved for historical reports.\n\n"
+            f"Proceed with deletion?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        try:
+            api.call(f"/offices/{office_id}/delete")
+            from src.offices import unregister_office
+            unregister_office(office_id)
+            if hasattr(self, '_update_office_combos'):
+                self._update_office_combos()
+            self.populate_offices_table()
+            self.refresh()
+            QMessageBox.information(self, "Office Deleted", f"Office '{office_name}' has been successfully deleted.")
+        except Exception as exc:
+            QMessageBox.critical(self, "Delete Failed", str(exc))
 
     def reset_office_password(self):
         office = self.office_filter.currentData()

@@ -8,6 +8,7 @@ OFFICES = [
     {"_id": "logistics-abuja", "name": "Logistics Abuja", "location": "Abuja"},
 ]
 OFFICE_MAP = {office["_id"]: office for office in OFFICES}
+CORE_OFFICE_IDS = {office["_id"] for office in OFFICES}
 
 
 def sync_offices(office_docs):
@@ -33,3 +34,13 @@ def register_office(doc):
     OFFICE_MAP[oid] = doc
     if not any(o["_id"] == oid for o in OFFICES):
         OFFICES.append(doc)
+
+
+def unregister_office(office_id):
+    """Remove a deleted office from runtime cache."""
+    if not office_id:
+        return
+    if office_id in OFFICE_MAP:
+        del OFFICE_MAP[office_id]
+    OFFICES[:] = [o for o in OFFICES if o.get("_id") != office_id]
+
