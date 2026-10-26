@@ -84,16 +84,13 @@ def build_morning_digest(db, target_date: str = None) -> dict:
         now_lagos = datetime.now(timezone.utc).astimezone(LAGOS)
         target_date = now_lagos.strftime("%Y-%m-%d")
 
-    # Fetch all active employees
     active_employees = list(db.employees.find({"status": "active"}))
     total_staff = len(active_employees)
 
-    # Fetch today's attendance records
     attendance_records = list(db.attendance_records.find({"work_date": target_date}))
     checked_in_emp_ids = {str(rec.get("employee_id")) for rec in attendance_records if rec.get("clock_in_at")}
     timed_out_emp_ids = {str(rec.get("employee_id")) for rec in attendance_records if rec.get("clock_out_at")}
 
-    # Group by office
     from src.offices import OFFICE_MAP
     offices_stats = {}
     for emp in active_employees:
@@ -130,7 +127,6 @@ def build_morning_digest(db, target_date: str = None) -> dict:
     total_absent = sum(s["absent"] for s in offices_stats.values())
     rate = round((total_present / total_staff * 100), 1) if total_staff else 0.0
 
-    # Format HTML table rows
     rows_html = ""
     for off_id, s in sorted(offices_stats.items(), key=lambda x: x[1]["name"]):
         pct = round(s["present"] / s["total"] * 100, 1) if s["total"] else 0
@@ -145,7 +141,6 @@ def build_morning_digest(db, target_date: str = None) -> dict:
         </tr>
         """
 
-    # Format absent staff section
     absent_sections_html = ""
     for off_id, s in sorted(offices_stats.items(), key=lambda x: x[1]["name"]):
         if s["absent_names"]:

@@ -60,7 +60,6 @@ class ManualClockInDialog(QDialog):
         f_layout = QVBoxLayout(form_group)
         f_layout.setSpacing(12)
 
-        # Employee Picker
         emp_label = QLabel("Select Employee:")
         emp_label.setStyleSheet(f"font-weight: 600; font-size: 13px; color: {label_color};")
         f_layout.addWidget(emp_label)
@@ -84,7 +83,6 @@ class ManualClockInDialog(QDialog):
 
         f_layout.addWidget(self.emp_combo)
 
-        # Action Picker
         action_layout = QHBoxLayout()
         action_label = QLabel("Action:")
         action_label.setStyleSheet(f"font-weight: 600; font-size: 13px; color: {label_color};")
@@ -101,7 +99,6 @@ class ManualClockInDialog(QDialog):
         action_layout.addStretch()
         f_layout.addLayout(action_layout)
 
-        # Date and Time
         dt_layout = QHBoxLayout()
         dt_layout.setSpacing(12)
 
@@ -127,7 +124,6 @@ class ManualClockInDialog(QDialog):
 
         f_layout.addLayout(dt_layout)
 
-        # Reason Picker
         r_lbl = QLabel("Reason for Manual Override:")
         r_lbl.setStyleSheet(f"color: {label_color}; font-weight: 500;")
         f_layout.addWidget(r_lbl)
@@ -150,7 +146,6 @@ class ManualClockInDialog(QDialog):
 
         layout.addWidget(form_group)
 
-        # Action Buttons
         btn_layout = QHBoxLayout()
         btn_layout.addStretch()
 

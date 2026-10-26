@@ -14,18 +14,14 @@ def create_eye_pixmap(visible: bool, is_dark: bool = True, size: int = 20) -> QP
     pen.setCapStyle(Qt.RoundCap)
     painter.setPen(pen)
 
-    # Eye almond shape
     cx, cy = size / 2.0, size / 2.0
-    # Draw top and bottom arcs
     painter.drawArc(int(cx - 8), int(cy - 5), 16, 10, 30 * 16, 120 * 16)
     painter.drawArc(int(cx - 8), int(cy - 5), 16, 10, 210 * 16, 120 * 16)
 
-    # Pupil
     painter.setBrush(QBrush(color))
     painter.drawEllipse(QPointF(cx, cy), 2.5, 2.5)
 
     if not visible:
-        # Diagonal slash line through eye
         slash_pen = QPen(QColor("#ef4444") if is_dark else QColor("#dc2626"), 1.8)
         slash_pen.setCapStyle(Qt.RoundCap)
         painter.setPen(slash_pen)

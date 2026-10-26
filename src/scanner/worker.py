@@ -20,7 +20,7 @@ class IBSU_ImageData(ctypes.Structure):
         ("ProcessThres", ctypes.c_uint32),
     ]
 
-HOLD_DURATION = 3.0  # Steady 3-second hold for proper fingerprint settling and capture
+HOLD_DURATION = 3.0
 
 
 class ScannerWorker(QThread):
@@ -66,7 +66,6 @@ class ScannerWorker(QThread):
                 if success and image_bytes and w > 0 and h > 0:
                     self.preview_frame.emit(image_bytes, w, h)
 
-                    # State 0: OK/Present, State 2: Contact/Present
                     finger_on_platen = (finger_state in (0, 2))
 
                     if finger_on_platen:
@@ -85,7 +84,6 @@ class ScannerWorker(QThread):
                             last_second_reported = remaining
                             self.scan_status.emit(f"Scanning: Hold finger steady ({remaining}s remaining)...")
 
-                        # Track best frame by ridge-valley contrast
                         img_np = np.frombuffer(image_bytes, dtype=np.uint8)
                         sharpness = float(np.std(img_np))
                         if sharpness > best_sharpness:
@@ -93,7 +91,6 @@ class ScannerWorker(QThread):
                             best_frame = (image_bytes, w, h)
 
                         if elapsed >= HOLD_DURATION:
-                            # 3-second hold completed successfully!
                             try:
                                 import winsound
                                 winsound.Beep(1500, 250)
@@ -111,10 +108,9 @@ class ScannerWorker(QThread):
                             time.sleep(1)
                             break
                     else:
-                        # Platen is empty or finger lifted
                         if hold_start_time is not None:
                             lost_finger_frames += 1
-                            if lost_finger_frames > 4:  # ~150ms buffer for transient contact flutter
+                            if lost_finger_frames > 4:
                                 hold_start_time = None
                                 best_frame = None
                                 best_sharpness = -1.0

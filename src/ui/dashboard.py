@@ -176,7 +176,6 @@ class DeleteHistoryDialog(QDialog):
         self.staff_combo = QComboBox()
         self.staff_combo.setFixedWidth(250)
 
-        # Filter employees by office if office admin
         if is_office_admin and office_id:
             filtered_emps = [e for e in self.employees.values() if e.get('office_id') == office_id]
         else:
@@ -377,7 +376,6 @@ class DashboardWidget(QWidget):
         self.summary.setStyleSheet('font-size: 14px; font-weight: bold; color: #4CAF50; padding: 6px 0;')
         layout.addWidget(self.summary)
 
-        # Row 1: Filters & Search Bar
         filters_row = QHBoxLayout()
         filters_row.setSpacing(10)
 
@@ -423,7 +421,6 @@ class DashboardWidget(QWidget):
 
         layout.addLayout(filters_row)
 
-        # Row 2: Action Toolbar
         actions_row = QHBoxLayout()
         actions_row.setSpacing(10)
         actions_row.setContentsMargins(0, 4, 0, 8)
@@ -450,28 +447,6 @@ class DashboardWidget(QWidget):
         self.manual_clock_btn.clicked.connect(self.open_manual_clock_in)
         actions_row.addWidget(self.manual_clock_btn)
 
-        # Email Digest feature (dormant / hashed out until revived)
-        # self.digest_btn = QPushButton('Email Digest')
-        # self.digest_btn.setFixedHeight(34)
-        # self.digest_btn.setToolTip('Configure recipient emails and preview the daily morning attendance digest')
-        # self.digest_btn.setStyleSheet("""
-        #     QPushButton {
-        #         background-color: #4f46e5;
-        #         color: #ffffff;
-        #         font-weight: 600;
-        #         font-size: 13px;
-        #         border-radius: 6px;
-        #         padding: 0 16px;
-        #     }
-        #     QPushButton:hover {
-        #         background-color: #4338ca;
-        #     }
-        #     QPushButton:pressed {
-        #         background-color: #3730a3;
-        #     }
-        # """)
-        # self.digest_btn.clicked.connect(self.open_digest_settings)
-        # actions_row.addWidget(self.digest_btn)
 
         export = QPushButton('Export Sheet')
         export.setFixedHeight(34)
@@ -557,7 +532,6 @@ class DashboardWidget(QWidget):
         employee_layout.addWidget(self.emp_table)
         self.tabs.addTab(employees, 'Manage employees')
 
-        # Offices Tab (Master Admin only) - Named 'Add offices' next to 'Manage employees'
         self.offices_widget = QWidget()
         offices_layout = QVBoxLayout(self.offices_widget)
         offices_layout.setContentsMargins(0, 10, 0, 0)
@@ -871,7 +845,6 @@ class DashboardWidget(QWidget):
             present_count = sum(1 for r in date_records if r.get('clock_in_at'))
             header_text = f"  Date: {date_display}    •    {len(date_records)} record(s)    •    {present_count} checked in"
 
-            # 1. Section Header Row for this Date
             h_row = self.attendance_table.rowCount()
             self.attendance_table.insertRow(h_row)
             self.attendance_table.setRowHeight(h_row, 36)
@@ -898,7 +871,6 @@ class DashboardWidget(QWidget):
                 dummy.setBackground(h_bg)
                 self.attendance_table.setItem(h_row, col, dummy)
 
-            # 2. Staff Attendance Rows for this Date
             for record in date_records:
                 employee = self.employees.get(str(record.get('employee_id')), {})
                 name = employee.get('full_name', 'Archived employee')
@@ -920,7 +892,6 @@ class DashboardWidget(QWidget):
                 curr_row = self.attendance_table.rowCount() - 1
                 self.attendance_table.setRowHeight(curr_row, 30)
 
-            # 3. Gap / Spacer Row after each Date group (except the last date)
             if date_idx < len(sorted_dates) - 1:
                 gap_row = self.attendance_table.rowCount()
                 self.attendance_table.insertRow(gap_row)

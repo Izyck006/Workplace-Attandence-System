@@ -44,7 +44,6 @@ class DigestSettingsDialog(QDialog):
         layout.addWidget(self.smtp_status_label)
 
         if self.is_master:
-            # Executive emails
             exec_group = QGroupBox("Executive & Head Office Recipients")
             e_layout = QVBoxLayout(exec_group)
             e_layout.addWidget(QLabel("Email addresses (comma-separated):"))
@@ -54,7 +53,6 @@ class DigestSettingsDialog(QDialog):
             e_layout.addWidget(self.exec_emails_input)
             layout.addWidget(exec_group)
 
-            # Schedule & Enable
             sched_layout = QHBoxLayout()
             self.enable_checkbox = QCheckBox("Enable Daily Morning Digest")
             self.enable_checkbox.setChecked(True)
@@ -65,11 +63,10 @@ class DigestSettingsDialog(QDialog):
             self.hour_combo = QComboBox()
             for h in range(7, 13):
                 self.hour_combo.addItem(f"{h:02d}:00 AM Lagos Time", h)
-            self.hour_combo.setCurrentIndex(2)  # 9:00 AM
+            self.hour_combo.setCurrentIndex(2)
             sched_layout.addWidget(self.hour_combo)
             layout.addLayout(sched_layout)
 
-            # Branch Office emails
             branch_group = QGroupBox("Branch Office Notification Emails")
             b_layout = QVBoxLayout(branch_group)
 
@@ -94,7 +91,6 @@ class DigestSettingsDialog(QDialog):
             layout.addWidget(branch_group)
 
         else:
-            # Office admin view (single branch)
             branch_group = QGroupBox("Your Branch Notification Email")
             b_layout = QVBoxLayout(branch_group)
             b_layout.addWidget(QLabel(f"Alert email for {self.user.get('office_id', 'this office')}:"))
@@ -104,7 +100,6 @@ class DigestSettingsDialog(QDialog):
             b_layout.addWidget(self.single_office_email)
             layout.addWidget(branch_group)
 
-        # Action Buttons
         btn_layout = QHBoxLayout()
 
         self.test_btn = QPushButton("Send Test Digest Now")
@@ -219,7 +214,6 @@ class DigestSettingsDialog(QDialog):
         self.test_btn.setText("Sending...")
 
         try:
-            # Let the admin choose which email receives the test
             target_test = ""
             if self.is_master and self.exec_emails_input.text().strip():
                 first_email = [e.strip() for e in self.exec_emails_input.text().split(",") if e.strip()]

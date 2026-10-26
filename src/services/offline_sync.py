@@ -148,7 +148,6 @@ class OfflineSyncManager:
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            # Check duplicate offline attempt
             cursor.execute("""
                 SELECT id FROM offline_records
                 WHERE employee_id = ? AND work_date = ? AND action = ?

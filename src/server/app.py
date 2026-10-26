@@ -585,7 +585,6 @@ def delete_attendance(body: DeleteAttendanceBody, user=Depends(admin), db=Depend
             raise HTTPException(400, "Specify a record ID, staff log date, or particular date to delete.")
 
     else:
-        # Master Admin
         if body.record_id:
             if ObjectId.is_valid(body.record_id):
                 query["_id"] = {"$in": [ObjectId(body.record_id), str(body.record_id)]}
@@ -651,9 +650,6 @@ async def stripe_webhook(request: Request):
     return {"status": "success"}
 
 
-# ---------------------------------------------------------
-# Feature 1: Offline Template Caching & Offline Record Sync
-# ---------------------------------------------------------
 
 @app.get("/sync/kiosk-cache")
 @app.post("/sync/kiosk-cache")
@@ -750,9 +746,6 @@ def sync_offline_records(body: OfflineSyncBody, user=Depends(ready_user), db=Dep
     return {"ok": True, "synced_ids": synced_ids, "synced_count": len(synced_ids)}
 
 
-# ---------------------------------------------------------
-# Feature 2: Supervisor Emergency Check-in / Manual Override
-# ---------------------------------------------------------
 
 class ManualAttendanceBody(BaseModel):
     employee_id: str
@@ -826,9 +819,6 @@ def manual_attendance_record(body: ManualAttendanceBody, user=Depends(admin), db
     return {"ok": True, "message": msg, "work_date": work_date, "time": time_str}
 
 
-# ---------------------------------------------------------
-# Feature 3: Daily Morning Executive Digest (Email)
-# ---------------------------------------------------------
 
 class DigestSettingsBody(BaseModel):
     executive_emails: list[str] | None = None
@@ -893,7 +883,6 @@ def save_digest_settings(body: DigestSettingsBody, user=Depends(admin), db=Depen
         audit(db, user, "digest_settings_updated", off_id)
         return {"ok": True, "message": "Branch notification email updated."}
 
-    # Main admin can configure executive and all office emails
     update_data = {"updated_at": datetime.utcnow()}
     if body.executive_emails is not None:
         cleaned_exec = []
@@ -976,7 +965,6 @@ def send_digest_now(body: SendDigestBody = None, user=Depends(admin), db=Depends
     subject = f"Randaframes Attendance - Morning Digest ({digest['date']})"
     send_res = send_email(recipients, subject, digest["html"], digest["text"])
 
-    # Record digest history
     db.digest_history.insert_one({
         "target_date": digest["date"],
         "sent_at": datetime.utcnow(),

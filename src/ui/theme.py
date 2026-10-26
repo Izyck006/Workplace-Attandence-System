@@ -455,7 +455,7 @@ QMessageBox {
 
 
 class ThemeManager(QObject):
-    theme_changed = Signal(bool)  # emits True for dark, False for light
+    theme_changed = Signal(bool)
 
     _instance = None
 

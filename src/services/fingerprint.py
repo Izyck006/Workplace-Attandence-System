@@ -19,10 +19,8 @@ class FingerprintMatcher:
         img_array = np.frombuffer(image_bytes, dtype=np.uint8)
         img = img_array.reshape((height, width))
 
-        # 1. Bilateral filter: smooths sweat/contact noise in valleys without blurring ridge edges
         filtered = cv2.bilateralFilter(img, d=5, sigmaColor=50, sigmaSpace=50)
 
-        # 2. Balanced CLAHE enhancement
         clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
         enhanced = clahe.apply(filtered)
 

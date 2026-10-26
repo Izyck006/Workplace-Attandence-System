@@ -39,40 +39,34 @@ class AddOfficeDialog(QDialog):
         desc.setStyleSheet("color: #888888; font-size: 12px; margin-bottom: 4px;")
         layout.addWidget(desc)
 
-        # 1. Office Name
         layout.addWidget(QLabel("Office Name:"))
         self.name_input = QLineEdit()
         self.name_input.setPlaceholderText("e.g. Logistics Ibadan")
         self.name_input.textChanged.connect(self._on_name_changed)
         layout.addWidget(self.name_input)
 
-        # 2. Location
         layout.addWidget(QLabel("Location / City:"))
         self.location_input = QLineEdit()
         self.location_input.setPlaceholderText("e.g. Ibadan")
         layout.addWidget(self.location_input)
 
-        # 3. Office ID (slug)
         layout.addWidget(QLabel("Office ID (System Slug):"))
         self.id_input = QLineEdit()
         self.id_input.setPlaceholderText("e.g. logistics-ibadan")
         self.id_input.textChanged.connect(self._on_id_changed)
         layout.addWidget(self.id_input)
 
-        # Separator line
         sep = QFrame()
         sep.setFrameShape(QFrame.HLine)
         sep.setFrameShadow(QFrame.Sunken)
         sep.setStyleSheet("color: #333333; margin: 4px 0;")
         layout.addWidget(sep)
 
-        # 4. Admin Username
         layout.addWidget(QLabel("Office Admin Username:"))
         self.username_input = QLineEdit()
         self.username_input.setPlaceholderText("e.g. logistics-ibadan")
         layout.addWidget(self.username_input)
 
-        # 5. Temporary Password
         layout.addWidget(QLabel("Temporary Password:"))
         pw_box = QHBoxLayout()
         self.pw_input = PasswordLineEdit("Temporary Password")
@@ -92,7 +86,6 @@ class AddOfficeDialog(QDialog):
         pw_box.addWidget(self.copy_pw_btn)
         layout.addLayout(pw_box)
 
-        # 6. Copy credentials button
         copy_box = QHBoxLayout()
         self.copy_btn = QPushButton("Copy All Credentials to Clipboard")
         self.copy_btn.setFixedHeight(32)
@@ -116,7 +109,6 @@ class AddOfficeDialog(QDialog):
         copy_box.addStretch()
         layout.addLayout(copy_box)
 
-        # Action Buttons
         btn_layout = QHBoxLayout()
         btn_layout.addStretch()
 
@@ -231,7 +223,6 @@ class AddOfficeDialog(QDialog):
                 "name": name,
                 "location": loc
             }
-            # Automatically copy credentials to clipboard
             QApplication.clipboard().setText(self._get_credentials_text())
 
             QMessageBox.information(
