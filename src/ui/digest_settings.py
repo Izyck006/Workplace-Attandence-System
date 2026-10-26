@@ -19,7 +19,7 @@ class DigestSettingsDialog(QDialog):
 
     def setup_ui(self):
         from src.ui.theme import ThemeManager
-        is_dark = ThemeManager.instance().is_dark()
+        is_dark = ThemeManager.instance().is_dark
         title_color = "#60a5fa" if is_dark else "#1e3a8a"
         desc_color = "#94a3b8" if is_dark else "#64748b"
 

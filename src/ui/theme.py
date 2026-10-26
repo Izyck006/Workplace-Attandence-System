@@ -474,6 +474,9 @@ class ThemeManager(QObject):
     def is_dark(self) -> bool:
         return self._is_dark
 
+    def get_is_dark(self) -> bool:
+        return self._is_dark
+
     def apply(self, app=None):
         if app is None:
             app = QApplication.instance()

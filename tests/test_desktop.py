@@ -401,4 +401,14 @@ def test_add_office_dialog_password_and_clipboard(qtbot, monkeypatch):
     assert 'logistics-asaba' in OFFICE_MAP
 
 
+def test_manual_clock_and_digest_dialogs_instantiate(qtbot):
+    from src.ui.manual_clock import ManualClockInDialog
+    from src.ui.digest_settings import DigestSettingsDialog
 
+    manual_dialog = ManualClockInDialog(employees={}, parent=None)
+    qtbot.addWidget(manual_dialog)
+    assert manual_dialog.windowTitle() == "Supervisor Manual Staff Clock-In / Out"
+
+    digest_dialog = DigestSettingsDialog(user={"role": "main_admin"}, parent=None)
+    qtbot.addWidget(digest_dialog)
+    assert digest_dialog.windowTitle() == "Daily Morning Email Digest Settings"

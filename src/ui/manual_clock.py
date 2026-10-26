@@ -12,7 +12,7 @@ class ManualClockInDialog(QDialog):
         self.setWindowTitle("Supervisor Manual Staff Clock-In / Out")
         self.setFixedWidth(520)
         self.employees = employees or {}
-        self.is_dark = ThemeManager.instance().is_dark()
+        self.is_dark = ThemeManager.instance().is_dark
         self.setup_ui()
 
     def setup_ui(self):
