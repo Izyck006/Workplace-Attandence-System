@@ -1,0 +1,185 @@
+from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
+                             QPushButton, QComboBox, QRadioButton, QButtonGroup,
+                             QDateEdit, QTimeEdit, QLineEdit, QMessageBox, QGroupBox)
+from PySide6.QtCore import Qt, QDate, QTime
+from src.client import api
+
+
+class ManualClockInDialog(QDialog):
+    def __init__(self, employees=None, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Supervisor Manual Staff Clock-In / Out")
+        self.setFixedWidth(500)
+        self.employees = employees or {}
+        self.setup_ui()
+
+    def setup_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setSpacing(14)
+
+        title = QLabel("Manual Staff Check-In / Out")
+        title.setStyleSheet("font-size: 16px; font-weight: bold; color: #2563eb;")
+        layout.addWidget(title)
+
+        desc = QLabel(
+            "Record attendance for staff with injured/unreadable fingerprints or hardware issues. "
+            "All entries are stamped with your supervisor username in the audit log."
+        )
+        desc.setWordWrap(True)
+        desc.setStyleSheet("color: #6b7280; font-size: 12px; margin-bottom: 4px;")
+        layout.addWidget(desc)
+
+        form_group = QGroupBox("Attendance Details")
+        f_layout = QVBoxLayout(form_group)
+        f_layout.setSpacing(12)
+
+        # Employee Picker
+        emp_label = QLabel("Select Employee:")
+        emp_label.setStyleSheet("font-weight: 600; font-size: 13px;")
+        f_layout.addWidget(emp_label)
+
+        self.emp_combo = QComboBox()
+        self.emp_combo.setFixedHeight(34)
+        sorted_emps = sorted(
+            [e for e in self.employees.values() if e.get("status") == "active"],
+            key=lambda e: (e.get("office_id", ""), e.get("full_name", ""))
+        )
+        for emp in sorted_emps:
+            name = emp.get("full_name") or f"{emp.get('first_name', '')} {emp.get('last_name', '')}".strip()
+            office = emp.get("office_id", "")
+            emp_no = emp.get("employee_no", "")
+            label = f"{name} ({emp_no}) - {office}"
+            self.emp_combo.addItem(label, str(emp.get("_id", "")))
+
+        if not sorted_emps:
+            self.emp_combo.addItem("No active employees found", "")
+            self.emp_combo.setEnabled(False)
+
+        f_layout.addWidget(self.emp_combo)
+
+        # Action Picker
+        action_layout = QHBoxLayout()
+        action_label = QLabel("Action:")
+        action_label.setStyleSheet("font-weight: 600; font-size: 13px;")
+        action_layout.addWidget(action_label)
+
+        self.action_group = QButtonGroup(self)
+        self.radio_in = QRadioButton("Time In")
+        self.radio_out = QRadioButton("Time Out")
+        self.radio_in.setChecked(True)
+        self.action_group.addButton(self.radio_in, 1)
+        self.action_group.addButton(self.radio_out, 2)
+        action_layout.addWidget(self.radio_in)
+        action_layout.addWidget(self.radio_out)
+        action_layout.addStretch()
+        f_layout.addLayout(action_layout)
+
+        # Date and Time
+        dt_layout = QHBoxLayout()
+        dt_layout.setSpacing(10)
+
+        date_box = QVBoxLayout()
+        date_box.addWidget(QLabel("Date:"))
+        self.date_edit = QDateEdit(QDate.currentDate())
+        self.date_edit.setCalendarPopup(True)
+        self.date_edit.setFixedHeight(32)
+        date_box.addWidget(self.date_edit)
+        dt_layout.addLayout(date_box)
+
+        time_box = QVBoxLayout()
+        time_box.addWidget(QLabel("Time (HH:MM):"))
+        self.time_edit = QTimeEdit(QTime.currentTime())
+        self.time_edit.setDisplayFormat("HH:mm")
+        self.time_edit.setFixedHeight(32)
+        time_box.addWidget(self.time_edit)
+        dt_layout.addLayout(time_box)
+
+        f_layout.addLayout(dt_layout)
+
+        # Reason Picker
+        f_layout.addWidget(QLabel("Reason for Manual Override:"))
+        self.reason_combo = QComboBox()
+        self.reason_combo.setFixedHeight(32)
+        self.reason_combo.addItems([
+            "Cut / injured finger",
+            "Biometric unreadable / dry skin",
+            "Scanner hardware issue",
+            "Supervisor verified on-site arrival",
+            "Off-site / field assignment",
+            "Other (specify below)"
+        ])
+        f_layout.addWidget(self.reason_combo)
+
+        self.custom_reason = QLineEdit()
+        self.custom_reason.setPlaceholderText("Additional notes or custom reason...")
+        self.custom_reason.setFixedHeight(32)
+        f_layout.addWidget(self.custom_reason)
+
+        layout.addWidget(form_group)
+
+        # Action Buttons
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+
+        self.cancel_btn = QPushButton("Cancel")
+        self.cancel_btn.setFixedHeight(36)
+        self.cancel_btn.clicked.connect(self.reject)
+        btn_layout.addWidget(self.cancel_btn)
+
+        self.submit_btn = QPushButton("Submit Manual Record")
+        self.submit_btn.setFixedHeight(36)
+        self.submit_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2563eb;
+                color: #ffffff;
+                font-weight: 600;
+                border-radius: 6px;
+                padding: 0 18px;
+            }
+            QPushButton:hover {
+                background-color: #1d4ed8;
+            }
+            QPushButton:pressed {
+                background-color: #1e40af;
+            }
+        """)
+        self.submit_btn.clicked.connect(self.submit_record)
+        btn_layout.addWidget(self.submit_btn)
+
+        layout.addLayout(btn_layout)
+
+    def submit_record(self):
+        emp_id = self.emp_combo.currentData()
+        if not emp_id:
+            QMessageBox.warning(self, "No Employee Selected", "Please select an active employee.")
+            return
+
+        action = "in" if self.radio_in.isChecked() else "out"
+        work_date = self.date_edit.date().toString("yyyy-MM-dd")
+        time_str = self.time_edit.time().toString("HH:mm")
+
+        selected_reason = self.reason_combo.currentText()
+        notes = self.custom_reason.text().strip()
+        reason = f"{selected_reason}: {notes}" if notes else selected_reason
+
+        self.submit_btn.setEnabled(False)
+        self.submit_btn.setText("Submitting...")
+
+        try:
+            res = api.manual_attendance_record(
+                employee_id=emp_id,
+                action=action,
+                work_date=work_date,
+                time_str=time_str,
+                reason=reason
+            )
+            QMessageBox.information(
+                self,
+                "Manual Record Confirmed",
+                res.get("message", "Manual attendance recorded successfully.")
+            )
+            self.accept()
+        except Exception as exc:
+            QMessageBox.critical(self, "Submission Failed", str(exc))
+            self.submit_btn.setEnabled(True)
+            self.submit_btn.setText("Submit Manual Record")

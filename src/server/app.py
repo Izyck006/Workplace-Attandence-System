@@ -605,3 +605,350 @@ async def stripe_webhook(request: Request):
     log.info("Verified Stripe webhook event: %s", event.get("type"))
     return {"status": "success"}
 
+
+# ---------------------------------------------------------
+# Feature 1: Offline Template Caching & Offline Record Sync
+# ---------------------------------------------------------
+
+@app.get("/sync/kiosk-cache")
+@app.post("/sync/kiosk-cache")
+def sync_kiosk_cache(user=Depends(ready_user), db=Depends(get_db)):
+    """Return active employee templates for local SQLite kiosk caching and offline verification."""
+    query = scope(user, {"status": "active", "has_fingerprint": True, "fingerprint_samples": {"$exists": True}})
+    projection = {
+        "_id": 1,
+        "office_id": 1,
+        "first_name": 1,
+        "last_name": 1,
+        "full_name": 1,
+        "employee_no": 1,
+        "job_title": 1,
+        "photo_bytes": 1,
+        "fingerprint_samples": 1,
+        "status": 1,
+        "updated_at": 1,
+    }
+    employees = list(db.employees.find(query, projection))
+    return {"employees": encode(employees), "count": len(employees)}
+
+
+class OfflineRecordItem(BaseModel):
+    offline_id: int | str
+    employee_id: str
+    action: str
+    recorded_at: str
+    work_date: str | None = None
+    office_id: str | None = None
+
+
+class OfflineSyncBody(BaseModel):
+    records: list[OfflineRecordItem] = Field(max_length=500)
+
+
+@app.post("/sync/offline-records")
+def sync_offline_records(body: OfflineSyncBody, user=Depends(ready_user), db=Depends(get_db)):
+    """Ingest attendance scans recorded offline while local internet was disconnected."""
+    synced_ids = []
+    for item in body.records:
+        if item.action not in ("in", "out"):
+            continue
+        emp_query = scope(user, {"_id": object_id(item.employee_id), "status": "active"})
+        emp = db.employees.find_one(emp_query)
+        if not emp:
+            continue
+
+        try:
+            recorded_dt = datetime.fromisoformat(item.recorded_at.replace("Z", "+00:00"))
+            if recorded_dt.tzinfo is None:
+                recorded_dt = recorded_dt.replace(tzinfo=timezone.utc)
+            recorded_dt = recorded_dt.astimezone(timezone.utc).replace(tzinfo=None)
+        except Exception:
+            recorded_dt = datetime.utcnow()
+
+        work_date = item.work_date
+        if not work_date:
+            work_date = recorded_dt.replace(tzinfo=timezone.utc).astimezone(LAGOS).strftime("%Y-%m-%d")
+
+        query = {"employee_id": emp["_id"], "office_id": emp["office_id"], "work_date": work_date}
+        if item.action == "in":
+            doc = dict(query, clock_in_at=recorded_dt, clock_out_at=None, status="present", day_type="working",
+                       source="offline_sync", is_edited=False, created_at=recorded_dt, updated_at=datetime.utcnow())
+            try:
+                db.attendance_records.update_one(query, {"$setOnInsert": doc}, upsert=True)
+            except DuplicateKeyError:
+                pass
+        else:
+            rec = db.attendance_records.find_one(query)
+            if rec and rec.get("clock_in_at"):
+                mins = max(0, int((recorded_dt - rec["clock_in_at"]).total_seconds() // 60))
+                db.attendance_records.update_one(dict(query, clock_out_at=None), {"$set": {
+                    "clock_out_at": recorded_dt, "minutes_worked": mins, "updated_at": datetime.utcnow()}})
+            else:
+                doc = dict(query, clock_in_at=recorded_dt, clock_out_at=recorded_dt, minutes_worked=0,
+                           status="present", day_type="working", source="offline_sync",
+                           is_edited=False, created_at=recorded_dt, updated_at=datetime.utcnow())
+                try:
+                    db.attendance_records.update_one(query, {"$setOnInsert": doc}, upsert=True)
+                except DuplicateKeyError:
+                    pass
+
+        synced_ids.append(item.offline_id)
+
+    audit(db, user, "offline_records_synced", f"synced_{len(synced_ids)}_records")
+    return {"ok": True, "synced_ids": synced_ids, "synced_count": len(synced_ids)}
+
+
+# ---------------------------------------------------------
+# Feature 2: Supervisor Emergency Check-in / Manual Override
+# ---------------------------------------------------------
+
+class ManualAttendanceBody(BaseModel):
+    employee_id: str
+    action: str
+    work_date: str | None = None
+    time_str: str | None = None
+    reason: str | None = None
+
+
+@app.post("/attendance/manual-record")
+def manual_attendance_record(body: ManualAttendanceBody, user=Depends(admin), db=Depends(get_db)):
+    """Allow office or master admin to manually record clock-in/out for injured/unreadable finger or emergency."""
+    if body.action not in ("in", "out"):
+        raise HTTPException(400, "Action must be either 'in' or 'out'.")
+
+    emp = db.employees.find_one(scope(user, {"_id": object_id(body.employee_id), "status": "active"}))
+    if not emp:
+        raise HTTPException(404, "Active employee not found in your assigned office.")
+
+    now_lagos = datetime.now(timezone.utc).astimezone(LAGOS)
+    work_date = body.work_date.strip() if body.work_date else now_lagos.strftime("%Y-%m-%d")
+    if not re.match(r"^\d{4}-\d{2}-\d{2}$", work_date):
+        raise HTTPException(400, "Invalid date format. Use YYYY-MM-DD.")
+
+    time_str = body.time_str.strip() if body.time_str else now_lagos.strftime("%H:%M")
+    if not re.match(r"^\d{2}:\d{2}$", time_str):
+        raise HTTPException(400, "Invalid time format. Use HH:MM.")
+
+    try:
+        hour, minute = map(int, time_str.split(":"))
+        year, month, day = map(int, work_date.split("-"))
+        target_lagos = datetime(year, month, day, hour, minute, tzinfo=LAGOS)
+        target_utc = target_lagos.astimezone(timezone.utc).replace(tzinfo=None)
+    except Exception:
+        raise HTTPException(400, "Invalid date or time value.")
+
+    reason = sanitize_string(body.reason or "Supervisor manual check-in", 200)
+    admin_name = user.get("username", "admin")
+    query = {"employee_id": emp["_id"], "office_id": emp["office_id"], "work_date": work_date}
+
+    if body.action == "in":
+        doc = dict(query, clock_in_at=target_utc, clock_out_at=None, status="present", day_type="working",
+                   source="supervisor_override", recorded_by=admin_name, reason=reason,
+                   is_edited=False, created_at=datetime.utcnow(), updated_at=datetime.utcnow())
+        res = db.attendance_records.update_one(query, {"$setOnInsert": doc}, upsert=True)
+        if not res.upserted_id:
+            db.attendance_records.update_one(query, {"$set": {
+                "clock_in_at": target_utc, "source": "supervisor_override",
+                "recorded_by": admin_name, "reason": reason, "updated_at": datetime.utcnow()
+            }})
+        msg = f"Time In recorded for {emp.get('full_name', emp.get('employee_no'))} at {time_str}."
+    else:
+        rec = db.attendance_records.find_one(query)
+        clock_in_at = (rec or {}).get("clock_in_at") or target_utc
+        mins = max(0, int((target_utc - clock_in_at).total_seconds() // 60))
+        if rec:
+            db.attendance_records.update_one(query, {"$set": {
+                "clock_out_at": target_utc, "minutes_worked": mins,
+                "source": "supervisor_override", "recorded_by": admin_name,
+                "reason": reason, "updated_at": datetime.utcnow()
+            }})
+        else:
+            doc = dict(query, clock_in_at=target_utc, clock_out_at=target_utc, minutes_worked=0,
+                       status="present", day_type="working", source="supervisor_override",
+                       recorded_by=admin_name, reason=reason, is_edited=False,
+                       created_at=datetime.utcnow(), updated_at=datetime.utcnow())
+            db.attendance_records.update_one(query, {"$setOnInsert": doc}, upsert=True)
+        msg = f"Time Out recorded for {emp.get('full_name', emp.get('employee_no'))} at {time_str}."
+
+    audit(db, user, f"supervisor_manual_clock_{body.action}", emp["_id"])
+    return {"ok": True, "message": msg, "work_date": work_date, "time": time_str}
+
+
+# ---------------------------------------------------------
+# Feature 3: Daily Morning Executive Digest (Email)
+# ---------------------------------------------------------
+
+class DigestSettingsBody(BaseModel):
+    executive_emails: list[str] | None = None
+    office_emails: dict[str, str] | None = None
+    office_email: str | None = None
+    send_hour: int | None = Field(default=None, ge=5, le=22)
+    is_enabled: bool | None = None
+
+
+@app.get("/digest/settings")
+def get_digest_settings(user=Depends(admin), db=Depends(get_db)):
+    """Retrieve configured recipient email addresses for the morning attendance digest."""
+    from src.services.email_service import is_smtp_configured
+    settings = db.settings.find_one({"_id": "digest_settings"}) or {}
+    exec_emails = settings.get("executive_emails", [])
+    office_emails = settings.get("office_emails", {})
+
+    if user["role"] == "office_admin":
+        return {
+            "office_id": user["office_id"],
+            "office_email": office_emails.get(user["office_id"], ""),
+            "smtp_configured": is_smtp_configured(),
+        }
+
+    return {
+        "executive_emails": exec_emails,
+        "office_emails": office_emails,
+        "send_hour": settings.get("send_hour", 9),
+        "is_enabled": settings.get("is_enabled", True),
+        "smtp_configured": is_smtp_configured(),
+    }
+
+
+@app.post("/digest/settings")
+def save_digest_settings(body: DigestSettingsBody, user=Depends(admin), db=Depends(get_db)):
+    """Save or update recipient email addresses for morning attendance digests."""
+    from src.services.email_service import validate_email_address
+
+    settings = db.settings.find_one({"_id": "digest_settings"}) or {
+        "_id": "digest_settings",
+        "executive_emails": [],
+        "office_emails": {},
+        "send_hour": 9,
+        "is_enabled": True
+    }
+
+    if user["role"] == "office_admin":
+        off_id = user["office_id"]
+        email = (body.office_email or "").strip()
+        if email and not validate_email_address(email):
+            raise HTTPException(400, "Invalid email address format.")
+        office_emails = settings.get("office_emails", {})
+        if email:
+            office_emails[off_id] = email
+        else:
+            office_emails.pop(off_id, None)
+        db.settings.update_one(
+            {"_id": "digest_settings"},
+            {"$set": {"office_emails": office_emails, "updated_at": datetime.utcnow()}},
+            upsert=True
+        )
+        audit(db, user, "digest_settings_updated", off_id)
+        return {"ok": True, "message": "Branch notification email updated."}
+
+    # Main admin can configure executive and all office emails
+    update_data = {"updated_at": datetime.utcnow()}
+    if body.executive_emails is not None:
+        cleaned_exec = []
+        for em in body.executive_emails:
+            em_clean = em.strip()
+            if em_clean:
+                if not validate_email_address(em_clean):
+                    raise HTTPException(400, f"Invalid executive email address: {em_clean}")
+                cleaned_exec.append(em_clean)
+        update_data["executive_emails"] = cleaned_exec
+
+    if body.office_emails is not None:
+        cleaned_offices = {}
+        for off_id, em in body.office_emails.items():
+            em_clean = (em or "").strip()
+            if em_clean:
+                if not validate_email_address(em_clean):
+                    raise HTTPException(400, f"Invalid email for office {off_id}: {em_clean}")
+                cleaned_offices[off_id] = em_clean
+        update_data["office_emails"] = cleaned_offices
+
+    if body.send_hour is not None:
+        update_data["send_hour"] = body.send_hour
+    if body.is_enabled is not None:
+        update_data["is_enabled"] = body.is_enabled
+
+    db.settings.update_one(
+        {"_id": "digest_settings"},
+        {"$set": update_data},
+        upsert=True
+    )
+    audit(db, user, "digest_settings_updated", "master_config")
+    return {"ok": True, "message": "Email notification settings saved successfully."}
+
+
+class SendDigestBody(BaseModel):
+    target_date: str | None = None
+    test_email: str | None = None
+
+
+@app.post("/digest/send-now")
+def send_digest_now(body: SendDigestBody = None, user=Depends(admin), db=Depends(get_db)):
+    """Trigger an immediate delivery of the Morning Executive Digest or a test email."""
+    from src.services.email_service import (
+        build_morning_digest,
+        send_email,
+        validate_email_address,
+        is_smtp_configured
+    )
+
+    body = body or SendDigestBody()
+    settings = db.settings.find_one({"_id": "digest_settings"}) or {}
+
+    recipients = []
+    if body.test_email:
+        test_addr = body.test_email.strip()
+        if not validate_email_address(test_addr):
+            raise HTTPException(400, "Invalid test email address.")
+        recipients = [test_addr]
+    else:
+        if user["role"] == "office_admin":
+            off_email = settings.get("office_emails", {}).get(user["office_id"])
+            if off_email:
+                recipients.append(off_email)
+            else:
+                raise HTTPException(400, "No email address configured for your branch. Please configure one first.")
+        else:
+            recipients = list(settings.get("executive_emails", []))
+            for em in settings.get("office_emails", {}).values():
+                if em and em not in recipients:
+                    recipients.append(em)
+            if not recipients:
+                raise HTTPException(400, "No recipient emails configured. Please add executive or office email addresses first.")
+
+    target_date = body.target_date
+    if target_date and not re.match(r"^\d{4}-\d{2}-\d{2}$", target_date):
+        raise HTTPException(400, "Invalid target date format. Use YYYY-MM-DD.")
+
+    digest = build_morning_digest(db, target_date)
+    subject = f"Randaframes Attendance - Morning Digest ({digest['date']})"
+    send_res = send_email(recipients, subject, digest["html"], digest["text"])
+
+    # Record digest history
+    db.digest_history.insert_one({
+        "target_date": digest["date"],
+        "sent_at": datetime.utcnow(),
+        "triggered_by": user.get("username", "admin"),
+        "recipients": recipients,
+        "total_staff": digest["total_staff"],
+        "total_present": digest["total_present"],
+        "total_absent": digest["total_absent"],
+        "turnout_rate": digest["turnout_rate"],
+        "success": send_res.get("success", False),
+        "result_message": send_res.get("message") or send_res.get("error", "")
+    })
+
+    audit(db, user, "digest_sent_manually", f"sent_to_{len(recipients)}_recipients")
+    return {
+        "ok": True,
+        "date": digest["date"],
+        "recipients": recipients,
+        "delivery": send_res,
+        "stats": {
+            "total_staff": digest["total_staff"],
+            "present": digest["total_present"],
+            "absent": digest["total_absent"],
+            "turnout": f"{digest['turnout_rate']}%"
+        }
+    }
+

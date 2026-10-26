@@ -22,7 +22,29 @@ class ScanWorker(QThread):
             result = api.call('/scan', {'samples': [self.sample.tolist()], 'action': self.action})
             self.scan_success.emit(result)
         except Exception as exc:
-            self.scan_error.emit(str(exc))
+            error_str = str(exc)
+            is_network_issue = any(term in error_str.lower() for term in (
+                "cannot reach", "timeout", "connection", "remote end closed",
+                "database unavailable", "network", "failed to establish"
+            ))
+            if is_network_issue:
+                try:
+                    from src.services.offline_sync import offline_manager
+                    employee, score = offline_manager.match_offline_fingerprint(self.sample)
+                    if employee and score >= 18:
+                        offline_result = offline_manager.record_offline_attendance(employee, self.action)
+                        self.scan_success.emit(offline_result)
+                        return
+                    elif employee is None and score == 0:
+                        self.scan_error.emit("Offline Mode: Server unreachable and no employee templates cached yet.")
+                        return
+                    else:
+                        self.scan_error.emit("Fingerprint not recognized clearly (offline). Please scan again.")
+                        return
+                except Exception as off_exc:
+                    self.scan_error.emit(f"Offline scan error: {off_exc}")
+                    return
+            self.scan_error.emit(error_str)
 
 
 class KioskWidget(QWidget):
@@ -38,7 +60,13 @@ class KioskWidget(QWidget):
         self.reconnect_timer = QTimer(self)
         self.reconnect_timer.setSingleShot(True)
         self.reconnect_timer.timeout.connect(self.reconnect_scanner)
+
+        self.sync_timer = QTimer(self)
+        self.sync_timer.setInterval(30_000)
+        self.sync_timer.timeout.connect(self.trigger_background_sync)
+
         self.setup_ui()
+        self.sync_timer.start()
 
     def setup_ui(self):
         main_layout = QVBoxLayout(self)
@@ -57,6 +85,19 @@ class KioskWidget(QWidget):
         title = QLabel("Randaframes Attendance Terminal")
         title.setFont(QFont("Arial", 20, QFont.Bold))
 
+        self.sync_badge = QLabel("Online")
+        self.sync_badge.setStyleSheet("""
+            QLabel {
+                background-color: #10b981;
+                color: #ffffff;
+                font-size: 11px;
+                font-weight: bold;
+                padding: 4px 10px;
+                border-radius: 10px;
+                margin-left: 12px;
+            }
+        """)
+
         from src.ui.theme import ThemeToggleButton
         self.theme_btn = ThemeToggleButton()
 
@@ -65,6 +106,7 @@ class KioskWidget(QWidget):
         admin_btn.clicked.connect(self.login_requested.emit)
 
         top_layout.addWidget(title)
+        top_layout.addWidget(self.sync_badge)
         top_layout.addStretch()
         top_layout.addWidget(self.theme_btn)
         top_layout.addWidget(admin_btn)
@@ -270,10 +312,56 @@ class KioskWidget(QWidget):
             self.radio_in.setStyleSheet(unselected_style)
             self.radio_out.setStyleSheet(selected_style)
 
+    def trigger_background_sync(self):
+        try:
+            from src.client import api
+            from src.services.offline_sync import offline_manager
+            pending = offline_manager.get_pending_count()
+            if pending > 0 and api.token:
+                offline_manager.push_offline_records_to_server(api)
+                pending = offline_manager.get_pending_count()
+
+            if pending > 0:
+                self.sync_badge.setText(f"Offline ({pending} queued)")
+                self.sync_badge.setStyleSheet("""
+                    QLabel {
+                        background-color: #f59e0b;
+                        color: #ffffff;
+                        font-size: 11px;
+                        font-weight: bold;
+                        padding: 4px 10px;
+                        border-radius: 10px;
+                        margin-left: 12px;
+                    }
+                """)
+            else:
+                self.sync_badge.setText("Online")
+                self.sync_badge.setStyleSheet("""
+                    QLabel {
+                        background-color: #10b981;
+                        color: #ffffff;
+                        font-size: 11px;
+                        font-weight: bold;
+                        padding: 4px 10px;
+                        border-radius: 10px;
+                        margin-left: 12px;
+                    }
+                """)
+        except Exception:
+            pass
+
     def showEvent(self, event):
         super().showEvent(event)
         speak("Welcome to Randaframes Attendance System.")
         self.start_scanner()
+        try:
+            from src.client import api
+            from src.services.offline_sync import offline_manager
+            if api.token:
+                QTimer.singleShot(1500, lambda: offline_manager.sync_templates_from_server(api))
+                QTimer.singleShot(2500, self.trigger_background_sync)
+        except Exception:
+            pass
 
     def hideEvent(self, event):
         super().hideEvent(event)
@@ -386,13 +474,20 @@ class KioskWidget(QWidget):
         first_name = employee.get('first_name', '')
         last_name = employee.get('last_name', '')
         action = result['action']
+        is_offline = result.get('offline', False)
 
         self.name_field.setText(f"{first_name} {last_name}".strip())
         self.id_field.setText(employee.get('employee_no', ''))
         self.job_field.setText(employee.get('job_title', ''))
         self.action_field.setText(action)
-        self.status_label.setText(f"{action} (Confirmed)")
-        self.status_label.setStyleSheet('color: green; font-size: 20px;')
+
+        if is_offline:
+            self.status_label.setText(f"{action} (Saved Offline - Queued)")
+            self.status_label.setStyleSheet('color: #d97706; font-size: 18px; font-weight: bold;')
+            self.trigger_background_sync()
+        else:
+            self.status_label.setText(f"{action} (Confirmed)")
+            self.status_label.setStyleSheet('color: green; font-size: 20px;')
 
         if employee.get('photo_bytes'):
             pixmap = QPixmap()
@@ -402,7 +497,14 @@ class KioskWidget(QWidget):
             self.photo_label.setText("No Photo")
             self.photo_label.setPixmap(QPixmap())
 
-        if 'Time In' in action:
+        if is_offline:
+            if 'Time In' in action:
+                speak(f"Welcome, {first_name}. Recorded offline.")
+            elif 'Time Out' in action:
+                speak(f"Goodbye, {first_name}. Recorded offline.")
+            else:
+                speak(f"Recorded offline for {first_name}.")
+        elif 'Time In' in action:
             speak(f"Welcome, {first_name}.")
         elif 'Time Out' in action:
             speak(f"Goodbye, {first_name}. Have a great day!")

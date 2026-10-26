@@ -126,6 +126,36 @@ class ApiClient:
         }
         return self.call("/attendance/delete", payload)
 
+    def manual_attendance_record(self, employee_id, action, work_date=None, time_str=None, reason=None):
+        payload = {
+            "employee_id": employee_id,
+            "action": action,
+            "work_date": work_date,
+            "time_str": time_str,
+            "reason": reason
+        }
+        return self.call("/attendance/manual-record", payload)
+
+    def get_digest_settings(self):
+        return self.call("/digest/settings")
+
+    def save_digest_settings(self, executive_emails=None, office_emails=None, office_email=None, send_hour=None, is_enabled=None):
+        payload = {
+            "executive_emails": executive_emails,
+            "office_emails": office_emails,
+            "office_email": office_email,
+            "send_hour": send_hour,
+            "is_enabled": is_enabled
+        }
+        return self.call("/digest/settings", payload)
+
+    def send_digest_now(self, test_email=None, target_date=None):
+        payload = {
+            "test_email": test_email,
+            "target_date": target_date
+        }
+        return self.call("/digest/send-now", payload)
+
 
 
 api = ApiClient()

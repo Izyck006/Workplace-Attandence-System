@@ -396,6 +396,30 @@ class DashboardWidget(QWidget):
         backups_btn.clicked.connect(self.open_backups_folder)
         filters.addWidget(backups_btn)
 
+        self.manual_clock_btn = QPushButton('Manual Staff Clock-in')
+        self.manual_clock_btn.setToolTip('Supervisor Emergency Check-in: manually record attendance for cut/unreadable finger')
+        self.manual_clock_btn.setStyleSheet("""
+            QPushButton {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #1e40af, stop:1 #2563eb);
+                color: #ffffff;
+                font-weight: 600;
+                font-size: 12px;
+                border: 1px solid #3b82f6;
+                border-radius: 5px;
+                padding: 5px 12px;
+            }
+            QPushButton:hover {
+                background: #1d4ed8;
+            }
+        """)
+        self.manual_clock_btn.clicked.connect(self.open_manual_clock_in)
+        filters.addWidget(self.manual_clock_btn)
+
+        self.digest_btn = QPushButton('Email Digest')
+        self.digest_btn.setToolTip('Configure recipient emails and preview the daily morning attendance digest')
+        self.digest_btn.clicked.connect(self.open_digest_settings)
+        filters.addWidget(self.digest_btn)
+
         self.delete_selected_btn = QPushButton('Delete Selected Log')
         self.delete_selected_btn.setToolTip('Permanently delete the selected attendance entry (Master Admin only)')
         self.delete_selected_btn.setStyleSheet("""
@@ -1258,6 +1282,17 @@ class DashboardWidget(QWidget):
             QMessageBox.information(self, "Office Deleted", f"Office '{office_name}' has been successfully deleted.")
         except Exception as exc:
             QMessageBox.critical(self, "Delete Failed", str(exc))
+
+    def open_manual_clock_in(self):
+        from src.ui.manual_clock import ManualClockInDialog
+        dialog = ManualClockInDialog(employees=self.employees, parent=self)
+        if dialog.exec():
+            self.refresh()
+
+    def open_digest_settings(self):
+        from src.ui.digest_settings import DigestSettingsDialog
+        dialog = DigestSettingsDialog(user=self.user, parent=self)
+        dialog.exec()
 
     def reset_office_password(self):
         office = self.office_filter.currentData()
