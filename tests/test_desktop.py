@@ -86,28 +86,42 @@ def test_dashboard_session_timeout_and_deletion_controls(qtbot, monkeypatch):
     assert dashboard.delete_selected_btn.isVisible()
     assert not dashboard.delete_selected_btn.isEnabled()
 
-    # Selecting date header row (row 0) does not enable delete
+    # Selecting date header row (row 0) enables deleting all records on that date
     dashboard.attendance_table.selectRow(0)
-    assert not dashboard.delete_selected_btn.isEnabled()
+    assert dashboard.delete_selected_btn.isEnabled()
+    assert "Delete Records on 2026-10-19" in dashboard.delete_selected_btn.text()
 
-    # Selecting actual attendance record (row 1) enables the sleek Delete Selected Log button
+    # Selecting actual attendance record (row 1) enables Delete Selected Log button
     dashboard.attendance_table.selectRow(1)
     assert dashboard.delete_selected_btn.isEnabled()
+    assert dashboard.delete_selected_btn.text() == "Delete Selected Log"
 
     # Deselecting disables it
     dashboard.attendance_table.clearSelection()
     assert not dashboard.delete_selected_btn.isEnabled()
 
-    # 3. Office Admin cannot see deletion controls
+    # 3. Office Admin CAN see deletion controls scoped to their office
     dashboard.set_user({'role': 'office_admin', 'office_id': 'engineering-kano'})
-    assert not dashboard.delete_history_btn.isVisible()
-    assert not dashboard.delete_selected_btn.isVisible()
+    assert dashboard.delete_history_btn.isVisible()
+    assert dashboard.delete_selected_btn.isVisible()
 
-    # 4. Verify DeleteHistoryDialog criteria and params
+    # Selecting date header row as office admin enables deleting records on that date
+    dashboard.attendance_table.selectRow(0)
+    assert dashboard.delete_selected_btn.isEnabled()
+    assert "Delete Records on 2026-10-19" in dashboard.delete_selected_btn.text()
+
+    # Selecting staff log as office admin enables Delete Selected Log
+    dashboard.attendance_table.selectRow(1)
+    assert dashboard.delete_selected_btn.isEnabled()
+    assert dashboard.delete_selected_btn.text() == "Delete Selected Log"
+
+    # 4. Verify DeleteHistoryDialog criteria and params for Office Admin
     emps = {str(kano): {'_id': kano, 'employee_no': 'K1', 'full_name': 'Kano Staff', 'office_id': 'engineering-kano'}}
-    dialog = DeleteHistoryDialog(employees=emps)
+    dialog = DeleteHistoryDialog(employees=emps, user={'role': 'office_admin', 'office_id': 'engineering-kano'})
     qtbot.addWidget(dialog)
 
+    assert not dialog.radio_all.isVisible()
+    assert not dialog.office_combo.isEnabled()
     assert dialog.radio_staff.isChecked()
     assert not dialog.delete_btn.isEnabled()
     dialog.confirm_input.setText("DELETE")
@@ -115,7 +129,14 @@ def test_dashboard_session_timeout_and_deletion_controls(qtbot, monkeypatch):
 
     params = dialog.get_delete_params()
     assert params.get('employee_id') == str(kano)
+    assert params.get('office_id') == 'engineering-kano'
     assert 'work_date' in params
+
+    # Date range for single date returns work_date
+    dialog.radio_range.setChecked(True)
+    params_range = dialog.get_delete_params()
+    assert 'work_date' in params_range
+    assert params_range.get('office_id') == 'engineering-kano'
 
 
 def test_dashboard_excel_and_csv_export(qtbot, tmp_path):

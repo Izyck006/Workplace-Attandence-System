@@ -210,37 +210,44 @@ def test_attendance_deletion_authorization_and_audit(system):
         {'employee_id': abuja['_id'], 'office_id': 'logistics-abuja', 'work_date': '2026-05-01'},
     ])
 
-    # 1. Office admin CANNOT delete attendance (403)
     kano_headers = auth(client, 'kano')
-    assert client.post('/attendance/delete', headers=kano_headers, json={'delete_all': True}).status_code == 403
-
-    # 2. Unauthenticated request rejected (401/403)
-    assert client.post('/attendance/delete', json={'delete_all': True}).status_code in (401, 403)
-
-    # 3. Master admin can delete a specific staff's log on a specific date
     master_headers = auth(client, 'master')
-    res = client.post('/attendance/delete', headers=master_headers, json={
-        'employee_id': str(kano['_id']),
-        'work_date': '2026-01-01'
+
+    # 1. Office admin CANNOT perform delete_all or before_date historical purges (403)
+    assert client.post('/attendance/delete', headers=kano_headers, json={'delete_all': True}).status_code == 403
+    assert client.post('/attendance/delete', headers=kano_headers, json={'before_date': '2026-05-01'}).status_code == 403
+
+    # 2. Office admin CANNOT delete another office's staff record
+    res_other = client.post('/attendance/delete', headers=kano_headers, json={
+        'employee_id': str(abuja['_id']),
+        'work_date': '2026-05-01'
     })
-    assert res.status_code == 200
-    assert res.json()['deleted_count'] == 1
+    assert res_other.status_code == 404
+
+    # 3. Unauthenticated request rejected (401/403)
+    assert client.post('/attendance/delete', json={'work_date': '2026-01-01'}).status_code in (401, 403)
+
+    # 4. Office admin CAN delete a particular date record in their office (work_date)
+    res_date = client.post('/attendance/delete', headers=kano_headers, json={'work_date': '2026-01-01'})
+    assert res_date.status_code == 200
+    assert res_date.json()['deleted_count'] == 1
     assert db.attendance_records.count_documents({}) == 2
 
-    # 4. Master admin can delete a single record by record_id
-    rec = db.attendance_records.find_one({'employee_id': kano['_id']})
-    res = client.post('/attendance/delete', headers=master_headers, json={'record_id': str(rec['_id'])})
-    assert res.status_code == 200
-    assert res.json()['deleted_count'] == 1
+    # 5. Office admin deletes a particular date where another office also has records; other office is unaffected!
+    res_date_2 = client.post('/attendance/delete', headers=kano_headers, json={'work_date': '2026-05-01'})
+    assert res_date_2.status_code == 200
+    assert res_date_2.json()['deleted_count'] == 1
+    # Only Abuja record on 2026-05-01 remains
     assert db.attendance_records.count_documents({}) == 1
+    assert db.attendance_records.find_one()['office_id'] == 'logistics-abuja'
 
-    # 5. Master admin can delete all remaining
-    res = client.post('/attendance/delete', headers=master_headers, json={'delete_all': True})
-    assert res.status_code == 200
-    assert res.json()['deleted_count'] == 1
+    # 6. Master admin can delete across all offices or delete_all
+    res_master = client.post('/attendance/delete', headers=master_headers, json={'delete_all': True})
+    assert res_master.status_code == 200
+    assert res_master.json()['deleted_count'] == 1
     assert db.attendance_records.count_documents({}) == 0
 
-    # 6. Check audit trail
+    # 7. Check audit trail
     assert db.audit_events.count_documents({'action': 'attendance_deleted'}) == 3
 
 

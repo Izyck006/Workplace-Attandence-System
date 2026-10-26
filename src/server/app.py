@@ -549,38 +549,77 @@ class DeleteAttendanceBody(BaseModel):
 
 
 @app.post("/attendance/delete")
-def delete_attendance(body: DeleteAttendanceBody, user=Depends(master), db=Depends(get_db)):
-    query = {}
-    if body.record_id:
-        if ObjectId.is_valid(body.record_id):
-            query["_id"] = {"$in": [ObjectId(body.record_id), str(body.record_id)]}
-        else:
-            query["_id"] = body.record_id
-    elif body.employee_id and body.work_date:
-        if not re.match(r"^\d{4}-\d{2}-\d{2}$", body.work_date):
-            raise HTTPException(400, "Invalid date format. Use YYYY-MM-DD.")
-        if ObjectId.is_valid(body.employee_id):
-            query["employee_id"] = {"$in": [ObjectId(body.employee_id), str(body.employee_id)]}
-        else:
-            query["employee_id"] = body.employee_id
-        query["work_date"] = body.work_date
-    elif body.delete_all:
-        query = {}
-    elif body.before_date:
-        if not re.match(r"^\d{4}-\d{2}-\d{2}$", body.before_date):
-            raise HTTPException(400, "Invalid date format. Use YYYY-MM-DD.")
-        query["work_date"] = {"$lte": body.before_date}
-    elif body.from_date and body.to_date:
-        if not (re.match(r"^\d{4}-\d{2}-\d{2}$", body.from_date) and re.match(r"^\d{4}-\d{2}-\d{2}$", body.to_date)):
-            raise HTTPException(400, "Invalid date format. Use YYYY-MM-DD.")
-        query["work_date"] = {"$gte": body.from_date, "$lte": body.to_date}
-    else:
-        raise HTTPException(400, "Specify a record ID, staff log date, date range, or delete_all flag.")
+def delete_attendance(body: DeleteAttendanceBody, user=Depends(admin), db=Depends(get_db)):
+    is_office_admin = user["role"] == "office_admin"
 
-    if body.office_id:
-        if not is_valid_office(body.office_id, db):
-            raise HTTPException(400, "Invalid office ID.")
-        query["office_id"] = body.office_id
+    query = {}
+    if is_office_admin:
+        query["office_id"] = user["office_id"]
+        if body.delete_all:
+            raise HTTPException(403, "Office admins cannot perform all-time company-wide deletions.")
+        if body.before_date:
+            raise HTTPException(403, "Office admins cannot purge historical records across all time.")
+
+        if body.record_id:
+            if ObjectId.is_valid(body.record_id):
+                query["_id"] = {"$in": [ObjectId(body.record_id), str(body.record_id)]}
+            else:
+                query["_id"] = body.record_id
+        elif body.employee_id and body.work_date:
+            if not re.match(r"^\d{4}-\d{2}-\d{2}$", body.work_date):
+                raise HTTPException(400, "Invalid date format. Use YYYY-MM-DD.")
+            emp = db.employees.find_one({"_id": object_id(body.employee_id), "office_id": user["office_id"]})
+            if not emp:
+                raise HTTPException(404, "Employee not found in your assigned office.")
+            query["employee_id"] = emp["_id"]
+            query["work_date"] = body.work_date
+        elif body.work_date:
+            if not re.match(r"^\d{4}-\d{2}-\d{2}$", body.work_date):
+                raise HTTPException(400, "Invalid date format. Use YYYY-MM-DD.")
+            query["work_date"] = body.work_date
+        elif body.from_date and body.to_date:
+            if not (re.match(r"^\d{4}-\d{2}-\d{2}$", body.from_date) and re.match(r"^\d{4}-\d{2}-\d{2}$", body.to_date)):
+                raise HTTPException(400, "Invalid date format. Use YYYY-MM-DD.")
+            query["work_date"] = {"$gte": body.from_date, "$lte": body.to_date}
+        else:
+            raise HTTPException(400, "Specify a record ID, staff log date, or particular date to delete.")
+
+    else:
+        # Master Admin
+        if body.record_id:
+            if ObjectId.is_valid(body.record_id):
+                query["_id"] = {"$in": [ObjectId(body.record_id), str(body.record_id)]}
+            else:
+                query["_id"] = body.record_id
+        elif body.employee_id and body.work_date:
+            if not re.match(r"^\d{4}-\d{2}-\d{2}$", body.work_date):
+                raise HTTPException(400, "Invalid date format. Use YYYY-MM-DD.")
+            if ObjectId.is_valid(body.employee_id):
+                query["employee_id"] = {"$in": [ObjectId(body.employee_id), str(body.employee_id)]}
+            else:
+                query["employee_id"] = body.employee_id
+            query["work_date"] = body.work_date
+        elif body.delete_all:
+            query = {}
+        elif body.before_date:
+            if not re.match(r"^\d{4}-\d{2}-\d{2}$", body.before_date):
+                raise HTTPException(400, "Invalid date format. Use YYYY-MM-DD.")
+            query["work_date"] = {"$lte": body.before_date}
+        elif body.from_date and body.to_date:
+            if not (re.match(r"^\d{4}-\d{2}-\d{2}$", body.from_date) and re.match(r"^\d{4}-\d{2}-\d{2}$", body.to_date)):
+                raise HTTPException(400, "Invalid date format. Use YYYY-MM-DD.")
+            query["work_date"] = {"$gte": body.from_date, "$lte": body.to_date}
+        elif body.work_date:
+            if not re.match(r"^\d{4}-\d{2}-\d{2}$", body.work_date):
+                raise HTTPException(400, "Invalid date format. Use YYYY-MM-DD.")
+            query["work_date"] = body.work_date
+        else:
+            raise HTTPException(400, "Specify a record ID, staff log date, date range, or delete_all flag.")
+
+        if body.office_id:
+            if not is_valid_office(body.office_id, db):
+                raise HTTPException(400, "Invalid office ID.")
+            query["office_id"] = body.office_id
 
     result = db.attendance_records.delete_many(query)
     audit(db, user, "attendance_deleted", f"deleted_{result.deleted_count}_records")
