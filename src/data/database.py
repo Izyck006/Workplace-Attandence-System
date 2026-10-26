@@ -17,7 +17,7 @@ class DatabaseManager:
             if not uri:
                 raise ValueError("MONGODB_URI not found in .env file")
             
-            options = {"serverSelectionTimeoutMS": 5000, "connectTimeoutMS": 5000, "socketTimeoutMS": 15000}
+            options = {"serverSelectionTimeoutMS": 20000, "connectTimeoutMS": 20000, "socketTimeoutMS": 30000}
             if uri.startswith('mongodb+srv:'):
                 try:
                     import dns.resolver

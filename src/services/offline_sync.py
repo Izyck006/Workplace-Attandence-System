@@ -250,10 +250,32 @@ class OfflineSyncManager:
             synced_ids = res.get("synced_ids", [])
             if synced_ids:
                 self.mark_records_synced(synced_ids)
+                log.info("Pushed and confirmed %d offline records to central server", len(synced_ids))
             return len(synced_ids)
         except Exception as exc:
             log.warning("Failed to push offline records to server: %s", exc)
             return 0
+
+    def has_local_time_in_today(self, employee_id: str, work_date: str = None) -> bool:
+        if not work_date:
+            work_date = datetime.now(timezone.utc).astimezone(LAGOS).strftime("%Y-%m-%d")
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT id FROM offline_records
+                WHERE employee_id = ? AND work_date = ? AND action = 'in'
+            """, (str(employee_id), work_date))
+            return cursor.fetchone() is not None
+
+    def check_server_online(self, api_client, timeout: float = 2.0) -> bool:
+        if not getattr(api_client, "url", None):
+            return False
+        try:
+            url = api_client.url.rstrip("/") + "/healthz"
+            resp = api_client._session.get(url, timeout=timeout)
+            return resp.status_code == 200
+        except Exception:
+            return False
 
 
 offline_manager = OfflineSyncManager()

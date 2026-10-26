@@ -18,11 +18,17 @@ class DigestSettingsDialog(QDialog):
         self.load_settings()
 
     def setup_ui(self):
+        from src.ui.theme import ThemeManager
+        is_dark = ThemeManager.instance().is_dark()
+        title_color = "#60a5fa" if is_dark else "#1e3a8a"
+        desc_color = "#94a3b8" if is_dark else "#64748b"
+
         layout = QVBoxLayout(self)
         layout.setSpacing(14)
+        layout.setContentsMargins(20, 20, 20, 20)
 
         title = QLabel("Morning Attendance Email Digest")
-        title.setStyleSheet("font-size: 16px; font-weight: bold; color: #1e3a8a;")
+        title.setStyleSheet(f"font-size: 17px; font-weight: bold; color: {title_color};")
         layout.addWidget(title)
 
         desc = QLabel(
@@ -30,11 +36,11 @@ class DigestSettingsDialog(QDialog):
             "Every morning, management receives a complete summary of who is present, late, or absent."
         )
         desc.setWordWrap(True)
-        desc.setStyleSheet("color: #6b7280; font-size: 12px; margin-bottom: 6px;")
+        desc.setStyleSheet(f"color: {desc_color}; font-size: 12px; margin-bottom: 4px;")
         layout.addWidget(desc)
 
         self.smtp_status_label = QLabel("Checking mail server status...")
-        self.smtp_status_label.setStyleSheet("font-size: 11px; padding: 4px 8px; border-radius: 4px; background: #f3f4f6; color: #4b5563;")
+        self.smtp_status_label.setStyleSheet("font-size: 11px; padding: 6px 10px; border-radius: 6px; background: #27272a; color: #a1a1aa;" if is_dark else "font-size: 11px; padding: 6px 10px; border-radius: 6px; background: #f3f4f6; color: #4b5563;")
         layout.addWidget(self.smtp_status_label)
 
         if self.is_master:

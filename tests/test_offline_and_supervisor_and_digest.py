@@ -134,7 +134,8 @@ def test_sync_offline_records(system):
     # Verify attendance record in MongoDB
     rec = db.attendance_records.find_one({"employee_id": kano_emp["_id"], "work_date": work_date})
     assert rec is not None
-    assert rec["source"] == "offline_sync"
+    assert rec["source"] == "scanner"
+    assert rec.get("offline_synced") is True
     assert rec["clock_in_at"] is not None
     assert rec["clock_out_at"] is not None
 
@@ -165,7 +166,8 @@ def test_supervisor_manual_clock_in_and_out(system):
     # Verify record in DB
     rec = db.attendance_records.find_one({"employee_id": kano_emp["_id"], "work_date": "2026-10-26"})
     assert rec is not None
-    assert rec["source"] == "supervisor_override"
+    assert rec["source"] == "manual"
+    assert rec.get("supervisor_override") is True
     assert rec["recorded_by"] == "kano_admin"
     assert "Cut finger" in rec["reason"]
 

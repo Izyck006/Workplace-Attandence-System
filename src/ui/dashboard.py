@@ -352,85 +352,127 @@ class DashboardWidget(QWidget):
         self.summary.setStyleSheet('font-size: 14px; font-weight: bold; color: #4CAF50; padding: 6px 0;')
         layout.addWidget(self.summary)
 
-        filters = QHBoxLayout()
+        # Row 1: Filters & Search Bar
+        filters_row = QHBoxLayout()
+        filters_row.setSpacing(10)
+
+        filters_row.addWidget(QLabel('Location:'))
         self.location_filter = QComboBox()
+        self.location_filter.setMinimumWidth(135)
         self.location_filter.addItem('All locations', '')
         for loc in sorted({o['location'] for o in OFFICES}):
             self.location_filter.addItem(loc, loc)
-        filters.addWidget(QLabel('Location:'))
-        filters.addWidget(self.location_filter)
+        filters_row.addWidget(self.location_filter)
 
+        filters_row.addWidget(QLabel('Office:'))
         self.office_filter = QComboBox()
+        self.office_filter.setMinimumWidth(180)
         self.office_filter.addItem('All offices', '')
         for o in OFFICES:
             self.office_filter.addItem(o['name'], o['_id'])
-        filters.addWidget(QLabel('Office:'))
-        filters.addWidget(self.office_filter)
+        filters_row.addWidget(self.office_filter)
 
         today = QDate.currentDate()
+        filters_row.addWidget(QLabel('From:'))
         self.from_date = QDateEdit(today.addDays(-7))
         self.from_date.setCalendarPopup(True)
+        self.from_date.setFixedWidth(120)
+        filters_row.addWidget(self.from_date)
+
+        filters_row.addWidget(QLabel('To:'))
         self.to_date = QDateEdit(today)
         self.to_date.setCalendarPopup(True)
-        filters.addWidget(QLabel('From:'))
-        filters.addWidget(self.from_date)
-        filters.addWidget(QLabel('To:'))
-        filters.addWidget(self.to_date)
+        self.to_date.setFixedWidth(120)
+        filters_row.addWidget(self.to_date)
 
         self.search = QLineEdit()
-        self.search.setPlaceholderText('Search staff name or ID')
+        self.search.setPlaceholderText('Search staff name or ID...')
+        self.search.setMinimumWidth(180)
         self.search.textChanged.connect(self.apply_search_filter)
-        filters.addWidget(self.search)
+        filters_row.addWidget(self.search, stretch=1)
 
         refresh = QPushButton('Refresh')
+        refresh.setFixedHeight(34)
         refresh.clicked.connect(self.refresh)
-        filters.addWidget(refresh)
+        filters_row.addWidget(refresh)
 
-        export = QPushButton('Export Sheet')
-        export.setToolTip('Export attendance records to Excel (.xlsx) or CSV')
-        export.clicked.connect(self.export_reports)
-        filters.addWidget(export)
+        layout.addLayout(filters_row)
 
-        backups_btn = QPushButton('Daily Backups')
-        backups_btn.setToolTip('Open the local SQLite daily attendance backups folder')
-        backups_btn.clicked.connect(self.open_backups_folder)
-        filters.addWidget(backups_btn)
+        # Row 2: Action Toolbar
+        actions_row = QHBoxLayout()
+        actions_row.setSpacing(10)
+        actions_row.setContentsMargins(0, 4, 0, 8)
 
-        self.manual_clock_btn = QPushButton('Manual Staff Clock-in')
+        self.manual_clock_btn = QPushButton('+ Manual Staff Clock-In')
+        self.manual_clock_btn.setFixedHeight(34)
         self.manual_clock_btn.setToolTip('Supervisor Emergency Check-in: manually record attendance for cut/unreadable finger')
         self.manual_clock_btn.setStyleSheet("""
             QPushButton {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #1e40af, stop:1 #2563eb);
+                background-color: #2563eb;
                 color: #ffffff;
                 font-weight: 600;
-                font-size: 12px;
-                border: 1px solid #3b82f6;
-                border-radius: 5px;
-                padding: 5px 12px;
+                font-size: 13px;
+                border-radius: 6px;
+                padding: 0 16px;
             }
             QPushButton:hover {
-                background: #1d4ed8;
+                background-color: #1d4ed8;
+            }
+            QPushButton:pressed {
+                background-color: #1e40af;
             }
         """)
         self.manual_clock_btn.clicked.connect(self.open_manual_clock_in)
-        filters.addWidget(self.manual_clock_btn)
+        actions_row.addWidget(self.manual_clock_btn)
 
         self.digest_btn = QPushButton('Email Digest')
+        self.digest_btn.setFixedHeight(34)
         self.digest_btn.setToolTip('Configure recipient emails and preview the daily morning attendance digest')
+        self.digest_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #4f46e5;
+                color: #ffffff;
+                font-weight: 600;
+                font-size: 13px;
+                border-radius: 6px;
+                padding: 0 16px;
+            }
+            QPushButton:hover {
+                background-color: #4338ca;
+            }
+            QPushButton:pressed {
+                background-color: #3730a3;
+            }
+        """)
         self.digest_btn.clicked.connect(self.open_digest_settings)
-        filters.addWidget(self.digest_btn)
+        actions_row.addWidget(self.digest_btn)
+
+        export = QPushButton('Export Sheet')
+        export.setFixedHeight(34)
+        export.setToolTip('Export attendance records to Excel (.xlsx) or CSV')
+        export.clicked.connect(self.export_reports)
+        actions_row.addWidget(export)
+
+        backups_btn = QPushButton('Daily Backups')
+        backups_btn.setFixedHeight(34)
+        backups_btn.setToolTip('Open the local SQLite daily attendance backups folder')
+        backups_btn.clicked.connect(self.open_backups_folder)
+        actions_row.addWidget(backups_btn)
+
+        actions_row.addStretch()
 
         self.delete_selected_btn = QPushButton('Delete Selected Log')
+        self.delete_selected_btn.setFixedHeight(34)
         self.delete_selected_btn.setToolTip('Permanently delete the selected attendance entry (Master Admin only)')
         self.delete_selected_btn.setStyleSheet("""
             QPushButton {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #3d141b, stop:0.5 #541b25, stop:1 #3d141b);
                 color: #ff99a8;
                 border: 1px solid #7c2431;
-                border-radius: 5px;
+                border-radius: 6px;
                 font-size: 12px;
                 font-weight: 600;
-                padding: 5px 14px;
+                padding: 0 14px;
             }
             QPushButton:hover {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #5e1c28, stop:0.5 #7a2233, stop:1 #5e1c28);
@@ -450,8 +492,9 @@ class DashboardWidget(QWidget):
         self.delete_selected_btn.setEnabled(False)
         self.delete_selected_btn.setVisible(False)
         self.delete_selected_btn.clicked.connect(self.delete_selected_log)
-        filters.addWidget(self.delete_selected_btn)
-        layout.addLayout(filters)
+        actions_row.addWidget(self.delete_selected_btn)
+
+        layout.addLayout(actions_row)
 
         self.tabs = QTabWidget()
         layout.addWidget(self.tabs)

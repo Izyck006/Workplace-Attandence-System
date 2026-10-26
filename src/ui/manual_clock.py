@@ -3,22 +3,31 @@ from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
                              QDateEdit, QTimeEdit, QLineEdit, QMessageBox, QGroupBox)
 from PySide6.QtCore import Qt, QDate, QTime
 from src.client import api
+from src.ui.theme import ThemeManager
 
 
 class ManualClockInDialog(QDialog):
     def __init__(self, employees=None, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Supervisor Manual Staff Clock-In / Out")
-        self.setFixedWidth(500)
+        self.setFixedWidth(520)
         self.employees = employees or {}
+        self.is_dark = ThemeManager.instance().is_dark()
         self.setup_ui()
 
     def setup_ui(self):
         layout = QVBoxLayout(self)
         layout.setSpacing(14)
+        layout.setContentsMargins(20, 20, 20, 20)
+
+        title_color = "#60a5fa" if self.is_dark else "#1d4ed8"
+        desc_color = "#94a3b8" if self.is_dark else "#64748b"
+        label_color = "#f1f5f9" if self.is_dark else "#1e293b"
+        card_bg = "#18181b" if self.is_dark else "#f8fafc"
+        card_border = "#27272a" if self.is_dark else "#e2e8f0"
 
         title = QLabel("Manual Staff Check-In / Out")
-        title.setStyleSheet("font-size: 16px; font-weight: bold; color: #2563eb;")
+        title.setStyleSheet(f"font-size: 17px; font-weight: bold; color: {title_color};")
         layout.addWidget(title)
 
         desc = QLabel(
@@ -26,20 +35,38 @@ class ManualClockInDialog(QDialog):
             "All entries are stamped with your supervisor username in the audit log."
         )
         desc.setWordWrap(True)
-        desc.setStyleSheet("color: #6b7280; font-size: 12px; margin-bottom: 4px;")
+        desc.setStyleSheet(f"color: {desc_color}; font-size: 12px; margin-bottom: 2px;")
         layout.addWidget(desc)
 
         form_group = QGroupBox("Attendance Details")
+        form_group.setStyleSheet(f"""
+            QGroupBox {{
+                background-color: {card_bg};
+                border: 1px solid {card_border};
+                border-radius: 8px;
+                margin-top: 14px;
+                padding: 16px 14px 14px 14px;
+                font-weight: bold;
+                color: {title_color};
+            }}
+            QGroupBox::title {{
+                subcontrol-origin: margin;
+                subcontrol-position: top left;
+                padding: 0 8px;
+                left: 12px;
+                color: {title_color};
+            }}
+        """)
         f_layout = QVBoxLayout(form_group)
         f_layout.setSpacing(12)
 
         # Employee Picker
         emp_label = QLabel("Select Employee:")
-        emp_label.setStyleSheet("font-weight: 600; font-size: 13px;")
+        emp_label.setStyleSheet(f"font-weight: 600; font-size: 13px; color: {label_color};")
         f_layout.addWidget(emp_label)
 
         self.emp_combo = QComboBox()
-        self.emp_combo.setFixedHeight(34)
+        self.emp_combo.setFixedHeight(36)
         sorted_emps = sorted(
             [e for e in self.employees.values() if e.get("status") == "active"],
             key=lambda e: (e.get("office_id", ""), e.get("full_name", ""))
@@ -60,7 +87,7 @@ class ManualClockInDialog(QDialog):
         # Action Picker
         action_layout = QHBoxLayout()
         action_label = QLabel("Action:")
-        action_label.setStyleSheet("font-weight: 600; font-size: 13px;")
+        action_label.setStyleSheet(f"font-weight: 600; font-size: 13px; color: {label_color};")
         action_layout.addWidget(action_label)
 
         self.action_group = QButtonGroup(self)
@@ -76,30 +103,36 @@ class ManualClockInDialog(QDialog):
 
         # Date and Time
         dt_layout = QHBoxLayout()
-        dt_layout.setSpacing(10)
+        dt_layout.setSpacing(12)
 
         date_box = QVBoxLayout()
-        date_box.addWidget(QLabel("Date:"))
+        d_lbl = QLabel("Date:")
+        d_lbl.setStyleSheet(f"color: {label_color}; font-weight: 500;")
+        date_box.addWidget(d_lbl)
         self.date_edit = QDateEdit(QDate.currentDate())
         self.date_edit.setCalendarPopup(True)
-        self.date_edit.setFixedHeight(32)
+        self.date_edit.setFixedHeight(34)
         date_box.addWidget(self.date_edit)
         dt_layout.addLayout(date_box)
 
         time_box = QVBoxLayout()
-        time_box.addWidget(QLabel("Time (HH:MM):"))
+        t_lbl = QLabel("Time (HH:MM):")
+        t_lbl.setStyleSheet(f"color: {label_color}; font-weight: 500;")
+        time_box.addWidget(t_lbl)
         self.time_edit = QTimeEdit(QTime.currentTime())
         self.time_edit.setDisplayFormat("HH:mm")
-        self.time_edit.setFixedHeight(32)
+        self.time_edit.setFixedHeight(34)
         time_box.addWidget(self.time_edit)
         dt_layout.addLayout(time_box)
 
         f_layout.addLayout(dt_layout)
 
         # Reason Picker
-        f_layout.addWidget(QLabel("Reason for Manual Override:"))
+        r_lbl = QLabel("Reason for Manual Override:")
+        r_lbl.setStyleSheet(f"color: {label_color}; font-weight: 500;")
+        f_layout.addWidget(r_lbl)
         self.reason_combo = QComboBox()
-        self.reason_combo.setFixedHeight(32)
+        self.reason_combo.setFixedHeight(34)
         self.reason_combo.addItems([
             "Cut / injured finger",
             "Biometric unreadable / dry skin",
@@ -112,7 +145,7 @@ class ManualClockInDialog(QDialog):
 
         self.custom_reason = QLineEdit()
         self.custom_reason.setPlaceholderText("Additional notes or custom reason...")
-        self.custom_reason.setFixedHeight(32)
+        self.custom_reason.setFixedHeight(34)
         f_layout.addWidget(self.custom_reason)
 
         layout.addWidget(form_group)
@@ -123,6 +156,20 @@ class ManualClockInDialog(QDialog):
 
         self.cancel_btn = QPushButton("Cancel")
         self.cancel_btn.setFixedHeight(36)
+        cancel_bg = "#27272a" if self.is_dark else "#e5e7eb"
+        cancel_fg = "#e2e8f0" if self.is_dark else "#374151"
+        self.cancel_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {cancel_bg};
+                color: {cancel_fg};
+                border: 1px solid {card_border};
+                border-radius: 6px;
+                padding: 0 16px;
+            }}
+            QPushButton:hover {{
+                background-color: {"#3f3f46" if self.is_dark else "#d1d5db"};
+            }}
+        """)
         self.cancel_btn.clicked.connect(self.reject)
         btn_layout.addWidget(self.cancel_btn)
 
@@ -134,7 +181,8 @@ class ManualClockInDialog(QDialog):
                 color: #ffffff;
                 font-weight: 600;
                 border-radius: 6px;
-                padding: 0 18px;
+                padding: 0 20px;
+                font-size: 13px;
             }
             QPushButton:hover {
                 background-color: #1d4ed8;

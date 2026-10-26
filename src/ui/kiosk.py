@@ -1,10 +1,47 @@
 import os
+import time
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
                              QGroupBox, QFormLayout, QLineEdit, QRadioButton, QButtonGroup)
-from PySide6.QtCore import Qt, Signal, QTimer, QThread
-from PySide6.QtGui import QFont, QPixmap
+from PySide6.QtCore import Qt, Signal, QTimer, QThread, QRectF
+from PySide6.QtGui import QFont, QPixmap, QImage, QPainter, QPainterPath, QColor
 from src.utils import get_asset_path, speak
 from src.scanner.worker import ScannerWorker
+
+
+class HeartbeatWorker(QThread):
+    status_updated = Signal(bool, int)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._running = True
+
+    def stop(self):
+        self._running = False
+
+    def run(self):
+        from src.client import api
+        from src.services.offline_sync import offline_manager
+
+        while self._running:
+            try:
+                is_online = offline_manager.check_server_online(api, timeout=2.0)
+                pending = offline_manager.get_pending_count()
+
+                # If connection resumed and we have queued records, push them immediately
+                if is_online and pending > 0 and getattr(api, "token", None):
+                    synced = offline_manager.push_offline_records_to_server(api)
+                    if synced > 0:
+                        pending = offline_manager.get_pending_count()
+
+                self.status_updated.emit(is_online, pending)
+            except Exception:
+                self.status_updated.emit(False, 0)
+
+            # Sleep in short increments for responsive thread termination
+            for _ in range(35):
+                if not self._running:
+                    break
+                time.sleep(0.1)
 
 
 class ScanWorker(QThread):
@@ -17,19 +54,44 @@ class ScanWorker(QThread):
         self.action = action
 
     def run(self):
+        from src.client import api
+        from src.services.offline_sync import offline_manager
+
+        # Proactively push any pending offline records (e.g. earlier offline Time In)
+        # to the central server so the server has the Time In record before processing /scan!
+        if offline_manager.get_pending_count() > 0 and getattr(api, "token", None):
+            try:
+                offline_manager.push_offline_records_to_server(api)
+            except Exception:
+                pass
+
         try:
-            from src.client import api
             result = api.call('/scan', {'samples': [self.sample.tolist()], 'action': self.action})
             self.scan_success.emit(result)
+            return
         except Exception as exc:
             error_str = str(exc)
+
+            # If server reported "Must time in first", check if an offline Time In is in local storage
+            if "time in first" in error_str.lower():
+                if offline_manager.get_pending_count() > 0 and getattr(api, "token", None):
+                    try:
+                        synced = offline_manager.push_offline_records_to_server(api)
+                        if synced > 0:
+                            retry_result = api.call('/scan', {'samples': [self.sample.tolist()], 'action': self.action})
+                            self.scan_success.emit(retry_result)
+                            return
+                    except Exception:
+                        pass
+
             is_network_issue = any(term in error_str.lower() for term in (
                 "cannot reach", "timeout", "connection", "remote end closed",
-                "database unavailable", "network", "failed to establish"
+                "database unavailable", "network", "failed to establish",
+                "nodename nor servname", "name or service not known", "refused",
+                "socket", "offline", "unreachable"
             ))
             if is_network_issue:
                 try:
-                    from src.services.offline_sync import offline_manager
                     employee, score = offline_manager.match_offline_fingerprint(self.sample)
                     if employee and score >= 18:
                         offline_result = offline_manager.record_offline_attendance(employee, self.action)
@@ -44,6 +106,7 @@ class ScanWorker(QThread):
                 except Exception as off_exc:
                     self.scan_error.emit(f"Offline scan error: {off_exc}")
                     return
+
             self.scan_error.emit(error_str)
 
 
@@ -57,16 +120,16 @@ class KioskWidget(QWidget):
         self.scanner_provider = scanner_provider
         self.worker = None
         self.scan_worker = None
+        self.heartbeat_worker = None
+        self.is_online = True
+        self.pending_count = 0
+        self._has_photo = False
+
         self.reconnect_timer = QTimer(self)
         self.reconnect_timer.setSingleShot(True)
         self.reconnect_timer.timeout.connect(self.reconnect_scanner)
 
-        self.sync_timer = QTimer(self)
-        self.sync_timer.setInterval(30_000)
-        self.sync_timer.timeout.connect(self.trigger_background_sync)
-
         self.setup_ui()
-        self.sync_timer.start()
 
     def setup_ui(self):
         main_layout = QVBoxLayout(self)
@@ -85,33 +148,25 @@ class KioskWidget(QWidget):
         title = QLabel("Randaframes Attendance Terminal")
         title.setFont(QFont("Arial", 20, QFont.Bold))
 
-        self.sync_badge = QLabel("Online")
-        self.sync_badge.setStyleSheet("""
-            QLabel {
-                background-color: #10b981;
-                color: #ffffff;
-                font-size: 11px;
-                font-weight: bold;
-                padding: 4px 10px;
-                border-radius: 10px;
-                margin-left: 12px;
-            }
-        """)
+        self.sync_badge = QLabel("● Checking...")
+        self.sync_badge.setCursor(Qt.PointingHandCursor)
+        self.sync_badge.mousePressEvent = lambda e: self.trigger_background_sync()
 
         from src.ui.theme import ThemeToggleButton
         self.theme_btn = ThemeToggleButton()
 
         admin_btn = QPushButton("Admin Login")
-        admin_btn.setFixedSize(160, 38)
+        admin_btn.setFixedSize(140, 38)
         admin_btn.clicked.connect(self.login_requested.emit)
 
-        top_layout.addWidget(title)
-        top_layout.addWidget(self.sync_badge)
-        top_layout.addStretch()
-        top_layout.addWidget(self.theme_btn)
-        top_layout.addWidget(admin_btn)
         reconnect = QPushButton("Reconnect scanner")
         reconnect.clicked.connect(self.reconnect_scanner)
+
+        top_layout.addWidget(title)
+        top_layout.addStretch()
+        top_layout.addWidget(self.sync_badge)
+        top_layout.addWidget(self.theme_btn)
+        top_layout.addWidget(admin_btn)
         top_layout.addWidget(reconnect)
 
         main_layout.addLayout(top_layout)
@@ -141,6 +196,7 @@ class KioskWidget(QWidget):
         self.action_group.addButton(self.radio_out)
 
         self._update_action_button_styles()
+        self._update_badge_ui()
         self.radio_in.toggled.connect(self._update_action_button_styles)
         self.radio_out.toggled.connect(self._update_action_button_styles)
         self.theme_btn.theme_mgr.theme_changed.connect(self.on_theme_changed)
@@ -172,7 +228,7 @@ class KioskWidget(QWidget):
 
         self.preview_label = QLabel()
         self.preview_label.setAlignment(Qt.AlignCenter)
-        self.preview_label.setStyleSheet("background-color: white; border: 1px solid #ccc;")
+        self.preview_label.setStyleSheet("background-color: white; border: 1px solid #ccc; border-radius: 8px;")
         self.preview_label.setMinimumSize(400, 400)
         self.preview_label.setScaledContents(False)
 
@@ -190,19 +246,19 @@ class KioskWidget(QWidget):
 
         self.name_field = QLineEdit()
         self.name_field.setReadOnly(True)
-        self.name_field.setStyleSheet("font-size: 16px; padding: 5px;")
+        self.name_field.setStyleSheet("font-size: 16px; padding: 6px 10px;")
 
         self.id_field = QLineEdit()
         self.id_field.setReadOnly(True)
-        self.id_field.setStyleSheet("font-size: 16px; padding: 5px;")
+        self.id_field.setStyleSheet("font-size: 16px; padding: 6px 10px;")
 
         self.job_field = QLineEdit()
         self.job_field.setReadOnly(True)
-        self.job_field.setStyleSheet("font-size: 16px; padding: 5px;")
+        self.job_field.setStyleSheet("font-size: 16px; padding: 6px 10px;")
 
         self.action_field = QLineEdit()
         self.action_field.setReadOnly(True)
-        self.action_field.setStyleSheet("font-size: 16px; padding: 5px; font-weight: bold;")
+        self.action_field.setStyleSheet("font-size: 16px; padding: 6px 10px; font-weight: bold;")
 
         label_font = QFont("Arial", 12)
         l1 = QLabel("Name:")
@@ -223,11 +279,12 @@ class KioskWidget(QWidget):
         photo_title = QLabel("Employee Photo")
         photo_title.setFont(label_font)
         photo_title.setAlignment(Qt.AlignCenter)
+
         self.photo_label = QLabel()
-        self.photo_label.setFixedSize(150, 150)
-        self.photo_label.setStyleSheet("border: 1px solid #ccc; background-color: #eee;")
+        self.photo_label.setFixedSize(160, 200)
         self.photo_label.setAlignment(Qt.AlignCenter)
-        self.photo_label.setText("No Photo")
+        self.photo_label.setAttribute(Qt.WA_StyledBackground, True)
+        self._update_photo_placeholder()
 
         photo_layout.addWidget(photo_title)
         photo_layout.addWidget(self.photo_label)
@@ -244,8 +301,148 @@ class KioskWidget(QWidget):
         main_layout.addLayout(content_layout)
         main_layout.addStretch()
 
+    def on_heartbeat_status(self, is_online: bool, pending_count: int):
+        self.is_online = is_online
+        self.pending_count = pending_count
+        self._update_badge_ui()
+
+    def _update_badge_ui(self):
+        try:
+            import shiboken6
+            if not shiboken6.isValid(self) or not hasattr(self, 'sync_badge') or not shiboken6.isValid(self.sync_badge):
+                return
+        except Exception:
+            return
+
+        is_online = getattr(self, 'is_online', True)
+        pending = getattr(self, 'pending_count', 0)
+
+        if is_online:
+            if pending > 0:
+                self.sync_badge.setText(f"● Syncing ({pending} pending)")
+                self.sync_badge.setToolTip(f"Central Server: Connected\n{pending} offline scan(s) queued.\nClick to sync now.")
+                self.sync_badge.setStyleSheet("""
+                    QLabel {
+                        background-color: rgba(59, 130, 246, 0.15);
+                        color: #3b82f6;
+                        border: 1px solid rgba(59, 130, 246, 0.45);
+                        font-size: 12px;
+                        font-weight: bold;
+                        padding: 6px 14px;
+                        border-radius: 14px;
+                        margin-right: 8px;
+                    }
+                """)
+            else:
+                self.sync_badge.setText("● Connected")
+                self.sync_badge.setToolTip("Central Server: Online\nAll records synchronized.")
+                self.sync_badge.setStyleSheet("""
+                    QLabel {
+                        background-color: rgba(16, 185, 129, 0.15);
+                        color: #10b981;
+                        border: 1px solid rgba(16, 185, 129, 0.45);
+                        font-size: 12px;
+                        font-weight: bold;
+                        padding: 6px 14px;
+                        border-radius: 14px;
+                        margin-right: 8px;
+                    }
+                """)
+        else:
+            q_txt = f" ({pending} queued)" if pending > 0 else ""
+            self.sync_badge.setText(f"● Offline Mode{q_txt}")
+            self.sync_badge.setToolTip(f"Central Server: Unreachable (Offline)\nScans are safely cached locally and will auto-sync upon reconnection.\nClick to test connection.")
+            self.sync_badge.setStyleSheet("""
+                QLabel {
+                    background-color: rgba(245, 158, 11, 0.18);
+                    color: #f59e0b;
+                    border: 1px solid rgba(245, 158, 11, 0.5);
+                    font-size: 12px;
+                    font-weight: bold;
+                    padding: 6px 14px;
+                    border-radius: 14px;
+                    margin-right: 8px;
+                }
+            """)
+
+    def _update_photo_placeholder(self):
+        self._has_photo = False
+        is_dark = self.theme_btn.theme_mgr.is_dark if hasattr(self, 'theme_btn') else True
+        if is_dark:
+            self.photo_label.setStyleSheet("""
+                QLabel {
+                    background-color: #18181b;
+                    border: 2px dashed #3f3f46;
+                    border-radius: 12px;
+                    color: #71717a;
+                    font-size: 13px;
+                    font-weight: bold;
+                }
+            """)
+        else:
+            self.photo_label.setStyleSheet("""
+                QLabel {
+                    background-color: #f8fafc;
+                    border: 2px dashed #cbd5e1;
+                    border-radius: 12px;
+                    color: #94a3b8;
+                    font-size: 13px;
+                    font-weight: bold;
+                }
+            """)
+        self.photo_label.setText("No Photo")
+        self.photo_label.setPixmap(QPixmap())
+
+    def _set_employee_photo(self, photo_bytes):
+        if not photo_bytes:
+            self._update_photo_placeholder()
+            return
+        try:
+            raw_pixmap = QPixmap()
+            raw_pixmap.loadFromData(photo_bytes)
+            if raw_pixmap.isNull():
+                self._update_photo_placeholder()
+                return
+
+            self._has_photo = True
+            target_w = 154
+            target_h = 194
+            scaled = raw_pixmap.scaled(target_w, target_h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+
+            rounded = QPixmap(scaled.size())
+            rounded.fill(Qt.transparent)
+
+            painter = QPainter(rounded)
+            painter.setRenderHint(QPainter.Antialiasing)
+            painter.setRenderHint(QPainter.SmoothPixmapTransform)
+            path = QPainterPath()
+            path.addRoundedRect(QRectF(0, 0, scaled.width(), scaled.height()), 10, 10)
+            painter.setClipPath(path)
+            painter.drawPixmap(0, 0, scaled)
+            painter.end()
+
+            is_dark = self.theme_btn.theme_mgr.is_dark if hasattr(self, 'theme_btn') else True
+            border_col = "#3f3f46" if is_dark else "#cbd5e1"
+            bg_col = "#18181b" if is_dark else "#f8fafc"
+
+            self.photo_label.setStyleSheet(f"""
+                QLabel {{
+                    background-color: {bg_col};
+                    border: 2px solid {border_col};
+                    border-radius: 12px;
+                    padding: 2px;
+                }}
+            """)
+            self.photo_label.setText("")
+            self.photo_label.setPixmap(rounded)
+        except Exception:
+            self._update_photo_placeholder()
+
     def on_theme_changed(self, is_dark: bool):
         self._update_action_button_styles()
+        self._update_badge_ui()
+        if not getattr(self, '_has_photo', False):
+            self._update_photo_placeholder()
 
     def _update_action_button_styles(self):
         try:
@@ -316,48 +513,44 @@ class KioskWidget(QWidget):
         try:
             from src.client import api
             from src.services.offline_sync import offline_manager
+            is_online = offline_manager.check_server_online(api, timeout=2.0)
+            self.is_online = is_online
             pending = offline_manager.get_pending_count()
-            if pending > 0 and api.token:
+            if is_online and pending > 0 and getattr(api, "token", None):
                 offline_manager.push_offline_records_to_server(api)
                 pending = offline_manager.get_pending_count()
-
-            if pending > 0:
-                self.sync_badge.setText(f"Offline ({pending} queued)")
-                self.sync_badge.setStyleSheet("""
-                    QLabel {
-                        background-color: #f59e0b;
-                        color: #ffffff;
-                        font-size: 11px;
-                        font-weight: bold;
-                        padding: 4px 10px;
-                        border-radius: 10px;
-                        margin-left: 12px;
-                    }
-                """)
-            else:
-                self.sync_badge.setText("Online")
-                self.sync_badge.setStyleSheet("""
-                    QLabel {
-                        background-color: #10b981;
-                        color: #ffffff;
-                        font-size: 11px;
-                        font-weight: bold;
-                        padding: 4px 10px;
-                        border-radius: 10px;
-                        margin-left: 12px;
-                    }
-                """)
+            self.pending_count = pending
+            self._update_badge_ui()
         except Exception:
             pass
+
+    def start_heartbeat(self):
+        if os.environ.get("QT_QPA_PLATFORM") == "offscreen":
+            return
+        if self.heartbeat_worker is None or not self.heartbeat_worker.isRunning():
+            self.heartbeat_worker = HeartbeatWorker(self)
+            self.heartbeat_worker.status_updated.connect(self.on_heartbeat_status)
+            self.heartbeat_worker.start()
+
+    def stop_heartbeat(self):
+        if hasattr(self, 'heartbeat_worker') and self.heartbeat_worker:
+            try:
+                if self.heartbeat_worker.isRunning():
+                    self.heartbeat_worker.stop()
+                    self.heartbeat_worker.wait(1000)
+            except Exception:
+                pass
+            self.heartbeat_worker = None
 
     def showEvent(self, event):
         super().showEvent(event)
         speak("Welcome to Randaframes Attendance System.")
         self.start_scanner()
+        self.start_heartbeat()
         try:
             from src.client import api
             from src.services.offline_sync import offline_manager
-            if api.token:
+            if getattr(api, "token", None):
                 QTimer.singleShot(1500, lambda: offline_manager.sync_templates_from_server(api))
                 QTimer.singleShot(2500, self.trigger_background_sync)
         except Exception:
@@ -366,6 +559,7 @@ class KioskWidget(QWidget):
     def hideEvent(self, event):
         super().hideEvent(event)
         self.stop_scanner()
+        self.stop_heartbeat()
 
     def start_scanner(self):
         if not self.isVisible():
@@ -403,6 +597,14 @@ class KioskWidget(QWidget):
             self.worker.wait()
             self.worker = None
 
+    def cleanup(self):
+        self.stop_scanner()
+        self.stop_heartbeat()
+
+    def closeEvent(self, event):
+        self.cleanup()
+        super().closeEvent(event)
+
     def update_status(self, msg):
         self.status_label.setStyleSheet("color: #0078D7; margin: 10px 0;")
         self.status_label.setText(msg)
@@ -414,8 +616,7 @@ class KioskWidget(QWidget):
         self.id_field.clear()
         self.job_field.clear()
         self.action_field.clear()
-        self.photo_label.setText("No Photo")
-        self.photo_label.setPixmap(QPixmap())
+        self._update_photo_placeholder()
 
     def start_countdown(self, seconds, callback):
         self.countdown_seconds = seconds
@@ -440,8 +641,7 @@ class KioskWidget(QWidget):
         self.id_field.clear()
         self.job_field.clear()
         self.action_field.clear()
-        self.photo_label.setText("No Photo")
-        self.photo_label.setPixmap(QPixmap())
+        self._update_photo_placeholder()
         self.status_label.setStyleSheet("color: #0078D7; margin: 10px 0;")
         self.status_label.setText("Place finger flat on scanner and hold steady (3s)...")
         self.start_scanner()
@@ -490,12 +690,9 @@ class KioskWidget(QWidget):
             self.status_label.setStyleSheet('color: green; font-size: 20px;')
 
         if employee.get('photo_bytes'):
-            pixmap = QPixmap()
-            pixmap.loadFromData(employee['photo_bytes'])
-            self.photo_label.setPixmap(pixmap.scaled(150, 150, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            self._set_employee_photo(employee['photo_bytes'])
         else:
-            self.photo_label.setText("No Photo")
-            self.photo_label.setPixmap(QPixmap())
+            self._update_photo_placeholder()
 
         if is_offline:
             if 'Time In' in action:

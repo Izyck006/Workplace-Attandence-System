@@ -71,7 +71,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, 'Terminal', str(exc))
 
     def closeEvent(self, event):
-        self.kiosk_view.stop_scanner()
+        self.kiosk_view.cleanup()
         self.scanner_provider.close()
         event.accept()
 

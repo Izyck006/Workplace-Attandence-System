@@ -42,7 +42,7 @@ QGroupBox::title {
     color: #3b82f6;
 }
 
-QLineEdit, QComboBox, QDateEdit, QSpinBox {
+QLineEdit, QComboBox, QDateEdit, QTimeEdit, QDateTimeEdit, QSpinBox {
     background-color: #1a1a1a;
     color: #ffffff;
     border: 1px solid #444444;
@@ -53,9 +53,58 @@ QLineEdit, QComboBox, QDateEdit, QSpinBox {
     selection-color: #ffffff;
 }
 
-QLineEdit:focus, QComboBox:focus, QDateEdit:focus {
+QLineEdit:focus, QComboBox:focus, QDateEdit:focus, QTimeEdit:focus, QDateTimeEdit:focus {
     border: 1px solid #2563eb;
     background-color: #222222;
+    color: #ffffff;
+}
+
+QTimeEdit::up-button, QTimeEdit::down-button, QDateEdit::up-button, QDateEdit::down-button {
+    background-color: #262626;
+    border: 1px solid #3f3f46;
+    border-radius: 2px;
+    width: 18px;
+}
+
+QTimeEdit::up-button:hover, QTimeEdit::down-button:hover, QDateEdit::up-button:hover, QDateEdit::down-button:hover {
+    background-color: #3b82f6;
+}
+
+QRadioButton, QCheckBox {
+    color: #e2e8f0;
+    font-size: 13px;
+    spacing: 8px;
+    background: transparent;
+}
+
+QRadioButton::indicator {
+    width: 16px;
+    height: 16px;
+    border: 2px solid #64748b;
+    border-radius: 9px;
+    background: #18181b;
+}
+
+QRadioButton::indicator:checked {
+    border: 2px solid #3b82f6;
+    background: #2563eb;
+}
+
+QRadioButton::indicator:hover {
+    border-color: #93c5fd;
+}
+
+QCheckBox::indicator {
+    width: 16px;
+    height: 16px;
+    border: 1px solid #64748b;
+    border-radius: 4px;
+    background: #18181b;
+}
+
+QCheckBox::indicator:checked {
+    background: #2563eb;
+    border-color: #3b82f6;
 }
 
 QComboBox::drop-down {
@@ -218,7 +267,7 @@ QGroupBox::title {
     color: #1d4ed8;
 }
 
-QLineEdit, QComboBox, QDateEdit, QSpinBox {
+QLineEdit, QComboBox, QDateEdit, QTimeEdit, QDateTimeEdit, QSpinBox {
     background-color: #ffffff;
     color: #111827;
     border: 1px solid #cbd5e1;
@@ -229,9 +278,58 @@ QLineEdit, QComboBox, QDateEdit, QSpinBox {
     selection-color: #ffffff;
 }
 
-QLineEdit:focus, QComboBox:focus, QDateEdit:focus {
+QLineEdit:focus, QComboBox:focus, QDateEdit:focus, QTimeEdit:focus, QDateTimeEdit:focus {
     border: 1px solid #2563eb;
     background-color: #ffffff;
+    color: #111827;
+}
+
+QTimeEdit::up-button, QTimeEdit::down-button, QDateEdit::up-button, QDateEdit::down-button {
+    background-color: #f1f5f9;
+    border: 1px solid #cbd5e1;
+    border-radius: 2px;
+    width: 18px;
+}
+
+QTimeEdit::up-button:hover, QTimeEdit::down-button:hover, QDateEdit::up-button:hover, QDateEdit::down-button:hover {
+    background-color: #e2e8f0;
+}
+
+QRadioButton, QCheckBox {
+    color: #1f2937;
+    font-size: 13px;
+    spacing: 8px;
+    background: transparent;
+}
+
+QRadioButton::indicator {
+    width: 16px;
+    height: 16px;
+    border: 2px solid #94a3b8;
+    border-radius: 9px;
+    background: #ffffff;
+}
+
+QRadioButton::indicator:checked {
+    border: 2px solid #2563eb;
+    background: #2563eb;
+}
+
+QRadioButton::indicator:hover {
+    border-color: #3b82f6;
+}
+
+QCheckBox::indicator {
+    width: 16px;
+    height: 16px;
+    border: 1px solid #94a3b8;
+    border-radius: 4px;
+    background: #ffffff;
+}
+
+QCheckBox::indicator:checked {
+    background: #2563eb;
+    border-color: #2563eb;
 }
 
 QComboBox::drop-down {

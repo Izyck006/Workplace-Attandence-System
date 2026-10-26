@@ -100,6 +100,12 @@ async def security_and_rate_limit(request: Request, call_next):
     return response
 
 
+@app.get("/healthz")
+@app.get("/health")
+def health_check():
+    return {"status": "ok", "time": datetime.utcnow().isoformat()}
+
+
 @app.exception_handler(PyMongoError)
 async def database_error(request, exc):
     log.error("Database operation failed: %s", type(exc).__name__)
@@ -671,24 +677,31 @@ def sync_offline_records(body: OfflineSyncBody, user=Depends(ready_user), db=Dep
 
         query = {"employee_id": emp["_id"], "office_id": emp["office_id"], "work_date": work_date}
         if item.action == "in":
-            doc = dict(query, clock_in_at=recorded_dt, clock_out_at=None, status="present", day_type="working",
-                       source="offline_sync", is_edited=False, created_at=recorded_dt, updated_at=datetime.utcnow())
-            try:
-                db.attendance_records.update_one(query, {"$setOnInsert": doc}, upsert=True)
-            except DuplicateKeyError:
-                pass
+            rec = db.attendance_records.find_one(query)
+            if not rec:
+                doc = dict(query, clock_in_at=recorded_dt, clock_out_at=None, status="present", day_type="working",
+                           source="scanner", offline_synced=True, is_edited=False, created_at=recorded_dt, updated_at=datetime.utcnow())
+                try:
+                    db.attendance_records.insert_one(doc)
+                except DuplicateKeyError:
+                    pass
+            elif not rec.get("clock_in_at"):
+                db.attendance_records.update_one(query, {"$set": {
+                    "clock_in_at": recorded_dt, "status": "present", "source": "scanner",
+                    "offline_synced": True, "updated_at": datetime.utcnow()
+                }})
         else:
             rec = db.attendance_records.find_one(query)
             if rec and rec.get("clock_in_at"):
                 mins = max(0, int((recorded_dt - rec["clock_in_at"]).total_seconds() // 60))
-                db.attendance_records.update_one(dict(query, clock_out_at=None), {"$set": {
-                    "clock_out_at": recorded_dt, "minutes_worked": mins, "updated_at": datetime.utcnow()}})
+                db.attendance_records.update_one(query, {"$set": {
+                    "clock_out_at": recorded_dt, "minutes_worked": mins, "offline_synced": True, "updated_at": datetime.utcnow()}})
             else:
                 doc = dict(query, clock_in_at=recorded_dt, clock_out_at=recorded_dt, minutes_worked=0,
-                           status="present", day_type="working", source="offline_sync",
+                           status="present", day_type="working", source="scanner", offline_synced=True,
                            is_edited=False, created_at=recorded_dt, updated_at=datetime.utcnow())
                 try:
-                    db.attendance_records.update_one(query, {"$setOnInsert": doc}, upsert=True)
+                    db.attendance_records.insert_one(doc)
                 except DuplicateKeyError:
                     pass
 
@@ -743,12 +756,12 @@ def manual_attendance_record(body: ManualAttendanceBody, user=Depends(admin), db
 
     if body.action == "in":
         doc = dict(query, clock_in_at=target_utc, clock_out_at=None, status="present", day_type="working",
-                   source="supervisor_override", recorded_by=admin_name, reason=reason,
+                   source="manual", supervisor_override=True, recorded_by=admin_name, reason=reason,
                    is_edited=False, created_at=datetime.utcnow(), updated_at=datetime.utcnow())
         res = db.attendance_records.update_one(query, {"$setOnInsert": doc}, upsert=True)
         if not res.upserted_id:
             db.attendance_records.update_one(query, {"$set": {
-                "clock_in_at": target_utc, "source": "supervisor_override",
+                "clock_in_at": target_utc, "source": "manual", "supervisor_override": True,
                 "recorded_by": admin_name, "reason": reason, "updated_at": datetime.utcnow()
             }})
         msg = f"Time In recorded for {emp.get('full_name', emp.get('employee_no'))} at {time_str}."
@@ -759,12 +772,12 @@ def manual_attendance_record(body: ManualAttendanceBody, user=Depends(admin), db
         if rec:
             db.attendance_records.update_one(query, {"$set": {
                 "clock_out_at": target_utc, "minutes_worked": mins,
-                "source": "supervisor_override", "recorded_by": admin_name,
+                "source": "manual", "supervisor_override": True, "recorded_by": admin_name,
                 "reason": reason, "updated_at": datetime.utcnow()
             }})
         else:
             doc = dict(query, clock_in_at=target_utc, clock_out_at=target_utc, minutes_worked=0,
-                       status="present", day_type="working", source="supervisor_override",
+                       status="present", day_type="working", source="manual", supervisor_override=True,
                        recorded_by=admin_name, reason=reason, is_edited=False,
                        created_at=datetime.utcnow(), updated_at=datetime.utcnow())
             db.attendance_records.update_one(query, {"$setOnInsert": doc}, upsert=True)
