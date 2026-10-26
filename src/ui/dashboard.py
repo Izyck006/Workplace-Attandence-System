@@ -450,27 +450,28 @@ class DashboardWidget(QWidget):
         self.manual_clock_btn.clicked.connect(self.open_manual_clock_in)
         actions_row.addWidget(self.manual_clock_btn)
 
-        self.digest_btn = QPushButton('Email Digest')
-        self.digest_btn.setFixedHeight(34)
-        self.digest_btn.setToolTip('Configure recipient emails and preview the daily morning attendance digest')
-        self.digest_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #4f46e5;
-                color: #ffffff;
-                font-weight: 600;
-                font-size: 13px;
-                border-radius: 6px;
-                padding: 0 16px;
-            }
-            QPushButton:hover {
-                background-color: #4338ca;
-            }
-            QPushButton:pressed {
-                background-color: #3730a3;
-            }
-        """)
-        self.digest_btn.clicked.connect(self.open_digest_settings)
-        actions_row.addWidget(self.digest_btn)
+        # Email Digest feature (dormant / hashed out until revived)
+        # self.digest_btn = QPushButton('Email Digest')
+        # self.digest_btn.setFixedHeight(34)
+        # self.digest_btn.setToolTip('Configure recipient emails and preview the daily morning attendance digest')
+        # self.digest_btn.setStyleSheet("""
+        #     QPushButton {
+        #         background-color: #4f46e5;
+        #         color: #ffffff;
+        #         font-weight: 600;
+        #         font-size: 13px;
+        #         border-radius: 6px;
+        #         padding: 0 16px;
+        #     }
+        #     QPushButton:hover {
+        #         background-color: #4338ca;
+        #     }
+        #     QPushButton:pressed {
+        #         background-color: #3730a3;
+        #     }
+        # """)
+        # self.digest_btn.clicked.connect(self.open_digest_settings)
+        # actions_row.addWidget(self.digest_btn)
 
         export = QPushButton('Export Sheet')
         export.setFixedHeight(34)
