@@ -792,9 +792,7 @@ class DashboardWidget(QWidget):
             self.populate_offices_table()
 
         active_ids = {e['_id'] for e in employees if e.get('status') == 'active'}
-        self.summary.setText(f'Active staff: {len(active_ids)}   |   Checked in today: {present_count}'
-                             f'   |   Not checked in: {max(0, len(active_ids) - present_count)}'
-                             f'   |   Displayed records: {len(records)}')
+        self.summary.setText(f'Active staff: {len(active_ids)}   |   Checked in today: {present_count}')
 
         try:
             from src.services.backup import BackupService
