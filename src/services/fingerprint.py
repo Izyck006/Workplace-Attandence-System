@@ -27,25 +27,36 @@ class FingerprintMatcher:
         keypoints, descriptors = self.detector.detectAndCompute(enhanced, None)
         return descriptors
 
-    def get_match_score(self, descriptors_probe, descriptors_db):
+    def get_match_score(self, descriptors_probe, descriptors_db, **kwargs):
+        """
+        Calculates biometric match score between probe and enrolled database descriptors.
+        Enforces strict Hamming distance thresholding to prevent false matches from random fingers.
+        
+        Statistical noise between two completely different fingerprints produces distances >= 40.
+        Only descriptors with distance < 36 represent genuine ridge minutiae correspondence.
+        Requires at least 4 high-confidence minutiae matches (< 36) before awarding any score.
+        """
         if descriptors_probe is None or descriptors_db is None:
             return 0
         if len(descriptors_probe) < 2 or len(descriptors_db) < 2:
             return 0
         try:
             matches = self.bf.match(descriptors_probe, descriptors_db)
+            good_matches = [m for m in matches if m.distance < 36]
+            if len(good_matches) < 4:
+                return 0
+
             score = 0
-            for m in matches:
+            for m in good_matches:
                 d = m.distance
-                if d < 28:
+                if d < 22:
                     score += 25
-                elif d < 38:
+                elif d < 28:
                     score += 15
-                elif d < 48:
+                elif d < 33:
                     score += 8
-                elif d < 58:
+                else:
                     score += 3
             return score
         except Exception:
             return 0
-

@@ -1,5 +1,6 @@
 from PySide6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QMessageBox
 from PySide6.QtCore import Qt, QTimer, Signal, QThread
+from PySide6.QtGui import QGuiApplication
 from src.scanner.worker import ScannerWorker
 from src.services.fingerprint import FingerprintMatcher
 
@@ -76,7 +77,6 @@ class EnrollFingerprintDialog(QDialog):
         self.status_label.setStyleSheet("font-size: 16px; color: #333; font-weight: bold;")
         layout.addWidget(self.status_label)
         
-        
         self.preview_label = QLabel()
         self.preview_label.setAlignment(Qt.AlignCenter)
         self.preview_label.setStyleSheet("background-color: white; border: 1px solid #ccc; border-radius: 8px;")
@@ -86,10 +86,16 @@ class EnrollFingerprintDialog(QDialog):
         
         btn_layout = QHBoxLayout()
         
+        self.reconnect_btn = QPushButton("Reconnect scanner")
+        self.reconnect_btn.clicked.connect(self.reconnect_scanner)
+        btn_layout.addWidget(self.reconnect_btn)
+
+        btn_layout.addStretch()
+
         self.cancel_btn = QPushButton("Cancel")
         self.cancel_btn.clicked.connect(self.reject)
-        
         btn_layout.addWidget(self.cancel_btn)
+
         layout.addLayout(btn_layout)
         
     def showEvent(self, event):
@@ -103,9 +109,16 @@ class EnrollFingerprintDialog(QDialog):
     def start_scanner(self):
         if not self.isVisible():
             return
-        if not self.scanner_provider.scanner:
-            self.status_label.setText("Scanner not connected!")
+        if not self.scanner_provider or not getattr(self.scanner_provider, 'scanner', None):
+            self.status_label.setStyleSheet("font-size: 16px; color: red;")
+            self.status_label.setText("Scanner not connected! Connect USB and click Reconnect scanner.")
             return
+
+        if not getattr(self.scanner_provider, '_is_initialized', False):
+            if not self.scanner_provider.initialize():
+                self.status_label.setStyleSheet("font-size: 16px; color: red;")
+                self.status_label.setText("Scanner not connected! Connect USB and click Reconnect scanner.")
+                return
             
         self.status_label.setText(self.instructions[self.step])
         self.status_label.setStyleSheet("font-size: 18px; color: #4285F4; font-weight: bold;")
@@ -117,6 +130,38 @@ class EnrollFingerprintDialog(QDialog):
             self.worker.preview_frame.connect(self.on_preview_frame)
             self.worker.scan_complete.connect(self.on_scan_complete)
             self.worker.start()
+
+    def reconnect_scanner(self):
+        self.stop_scanner()
+        if not self.scanner_provider:
+            self.status_label.setStyleSheet("font-size: 16px; color: red;")
+            self.status_label.setText("No scanner hardware configured.")
+            return
+
+        self.reconnect_btn.setEnabled(False)
+        self.reconnect_btn.setText("Reconnecting...")
+        self.status_label.setStyleSheet("font-size: 16px; color: #4285F4; font-weight: bold;")
+        self.status_label.setText("Reconnecting scanner...")
+        QGuiApplication.processEvents()
+        try:
+            if hasattr(self.scanner_provider, 'reconnect'):
+                success = self.scanner_provider.reconnect()
+            else:
+                self.scanner_provider.close()
+                success = self.scanner_provider.initialize()
+
+            if success:
+                self.status_label.setText("Scanner reconnected! Starting...")
+                self.start_scanner()
+            else:
+                self.status_label.setStyleSheet("font-size: 16px; color: red;")
+                self.status_label.setText("Connect scanner & install USB driver, then click Reconnect scanner.")
+        except Exception as exc:
+            self.status_label.setStyleSheet("font-size: 16px; color: red;")
+            self.status_label.setText(f"Reconnect error: {exc}")
+        finally:
+            self.reconnect_btn.setText("Reconnect scanner")
+            self.reconnect_btn.setEnabled(True)
             
     def stop_scanner(self):
         if hasattr(self, 'countdown_timer'):

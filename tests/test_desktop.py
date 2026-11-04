@@ -433,3 +433,89 @@ def test_manual_clock_and_digest_dialogs_instantiate(qtbot):
     digest_dialog = DigestSettingsDialog(user={"role": "main_admin"}, parent=None)
     qtbot.addWidget(digest_dialog)
     assert digest_dialog.windowTitle() == "Daily Morning Email Digest Settings"
+
+
+def test_dashboard_reconnect_scanner(qtbot, monkeypatch):
+    from src.ui.dashboard import DashboardWidget
+    from src.scanner.provider import MockProvider
+    from PySide6.QtWidgets import QMessageBox
+
+    info_messages = []
+    warning_messages = []
+    monkeypatch.setattr(QMessageBox, 'information', lambda parent, title, msg: info_messages.append(msg))
+    monkeypatch.setattr(QMessageBox, 'warning', lambda parent, title, msg: warning_messages.append(msg))
+
+    # 1. Test when scanner_provider is None
+    dash_no_scanner = DashboardWidget(scanner_provider=None)
+    qtbot.addWidget(dash_no_scanner)
+    assert hasattr(dash_no_scanner, 'reconnect_btn')
+    assert dash_no_scanner.reconnect_btn.text() == 'Reconnect scanner'
+    dash_no_scanner.reconnect_scanner()
+    assert len(info_messages) == 1
+    assert 'No scanner hardware' in info_messages[0]
+
+    # 2. Test when scanner_provider reconnects successfully
+    provider = MockProvider()
+    dash = DashboardWidget(scanner_provider=provider)
+    qtbot.addWidget(dash)
+    dash.reconnect_scanner()
+    assert provider._is_initialized is True
+    assert provider.is_connected is True
+    assert any('successfully' in msg for msg in info_messages)
+    assert dash.reconnect_btn.isEnabled() is True
+    assert dash.reconnect_btn.text() == 'Reconnect scanner'
+
+    # 3. Test when scanner_provider reconnect fails
+    monkeypatch.setattr(provider, 'initialize', lambda: False)
+    dash.reconnect_scanner()
+    assert len(warning_messages) >= 1
+    assert 'Connect the scanner' in warning_messages[0]
+    assert dash.reconnect_btn.isEnabled() is True
+    assert dash.reconnect_btn.text() == 'Reconnect scanner'
+
+
+def test_enrollment_dialog_reconnect_scanner(qtbot, monkeypatch):
+    from src.ui.enrollment import EnrollFingerprintDialog
+    from src.scanner.provider import MockProvider
+
+    provider = MockProvider()
+    dialog = EnrollFingerprintDialog('emp_123', scanner_provider=provider)
+    qtbot.addWidget(dialog)
+
+    assert hasattr(dialog, 'reconnect_btn')
+    assert dialog.reconnect_btn.text() == 'Reconnect scanner'
+
+    dialog.reconnect_scanner()
+    assert provider._is_initialized is True
+    assert dialog.reconnect_btn.isEnabled() is True
+
+
+def test_fingerprint_matcher_rejects_impostors_and_accepts_genuine():
+    import cv2
+    import numpy as np
+    from src.services.fingerprint import FingerprintMatcher
+
+    matcher = FingerprintMatcher()
+
+    img1 = cv2.imread('captures/scan_20261019_192109.png', cv2.IMREAD_GRAYSCALE)
+    img2 = cv2.imread('captures/scan_20261020_091940.png', cv2.IMREAD_GRAYSCALE)
+    if img1 is not None and img2 is not None:
+        h1, w1 = img1.shape
+        h2, w2 = img2.shape
+        d1 = matcher.extract_descriptors(img1.tobytes(), w1, h1)
+        d2 = matcher.extract_descriptors(img2.tobytes(), w2, h2)
+
+        # Different fingers must score 0 (strictly rejected under 18 threshold)
+        diff_score = matcher.get_match_score(d1, d2)
+        assert diff_score == 0
+
+        # Same finger (identical) must score high (> 1000)
+        self_score = matcher.get_match_score(d1, d1)
+        assert self_score >= 1000
+
+        # Same finger with slight shift must still score well above 18
+        M = np.float32([[1, 0, 3], [0, 1, 2]])
+        shifted = cv2.warpAffine(img1, M, (w1, h1))
+        d_shifted = matcher.extract_descriptors(shifted.tobytes(), w1, h1)
+        shifted_score = matcher.get_match_score(d1, d_shifted)
+        assert shifted_score >= 100

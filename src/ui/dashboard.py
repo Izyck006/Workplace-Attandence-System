@@ -359,6 +359,11 @@ class DashboardWidget(QWidget):
         header.addWidget(self.theme_btn)
         ThemeManager.instance().theme_changed.connect(self.on_theme_changed)
 
+        self.reconnect_btn = QPushButton('Reconnect scanner')
+        self.reconnect_btn.setToolTip('Reconnect and initialize the biometric fingerprint scanner')
+        self.reconnect_btn.clicked.connect(self.reconnect_scanner)
+        header.addWidget(self.reconnect_btn)
+
         self.kiosk_button = QPushButton('Open attendance terminal')
         self.kiosk_button.clicked.connect(self.kiosk_requested.emit)
         header.addWidget(self.kiosk_button)
@@ -1391,6 +1396,40 @@ class DashboardWidget(QWidget):
     def on_change_password_failed(self, error_msg):
         self.summary.setText('Password change failed.')
         QMessageBox.warning(self, 'Password not changed', error_msg)
+
+    def reconnect_scanner(self):
+        if not self.scanner_provider:
+            self.summary.setText('No scanner hardware configured.')
+            QMessageBox.information(self, 'Scanner', 'No scanner hardware configured.')
+            return
+
+        self.reconnect_btn.setEnabled(False)
+        self.reconnect_btn.setText('Reconnecting...')
+        self.summary.setText('Reconnecting scanner...')
+        QGuiApplication.processEvents()
+        try:
+            if hasattr(self.scanner_provider, 'reconnect'):
+                success = self.scanner_provider.reconnect()
+            else:
+                self.scanner_provider.close()
+                success = self.scanner_provider.initialize()
+
+            if success:
+                self.summary.setText('Scanner reconnected successfully.')
+                QMessageBox.information(self, 'Scanner', 'Scanner connected successfully.')
+            else:
+                self.summary.setText('Scanner reconnect failed: connect USB and install driver.')
+                QMessageBox.warning(
+                    self,
+                    'Scanner',
+                    'Connect the scanner and install the USB driver, then click Reconnect scanner.'
+                )
+        except Exception as exc:
+            self.summary.setText(f'Scanner error: {exc}')
+            QMessageBox.critical(self, 'Scanner Error', f'Failed to reconnect scanner: {exc}')
+        finally:
+            self.reconnect_btn.setText('Reconnect scanner')
+            self.reconnect_btn.setEnabled(True)
 
     def on_attendance_selection_changed(self):
         is_admin = bool(self.user and self.user.get('role') in ('main_admin', 'office_admin'))

@@ -24,6 +24,10 @@ class ScannerProvider(Protocol):
         """Release scanner resources."""
         ...
 
+    def reconnect(self) -> bool:
+        """Release and re-initialize scanner resources."""
+        ...
+
 class KojackVendorProvider:
     def __init__(self):
         self._is_initialized = False
@@ -71,6 +75,14 @@ class KojackVendorProvider:
             self.scanner.close_device()
         self._is_initialized = False
 
+    def reconnect(self) -> bool:
+        self.close()
+        return self.initialize()
+
+    @property
+    def is_connected(self) -> bool:
+        return self._is_initialized
+
 class MockProvider(ScannerProvider):
     """
     A simulated scanner provider that doesn't require physical hardware.
@@ -104,3 +116,11 @@ class MockProvider(ScannerProvider):
     def close(self):
         print("MockProvider: Closed virtual scanner")
         self._is_initialized = False
+
+    def reconnect(self) -> bool:
+        self.close()
+        return self.initialize()
+
+    @property
+    def is_connected(self) -> bool:
+        return self._is_initialized
