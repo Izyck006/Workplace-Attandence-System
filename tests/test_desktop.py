@@ -519,3 +519,57 @@ def test_fingerprint_matcher_rejects_impostors_and_accepts_genuine():
         d_shifted = matcher.extract_descriptors(shifted.tobytes(), w1, h1)
         shifted_score = matcher.get_match_score(d1, d_shifted)
         assert shifted_score >= 100
+
+
+def test_dashboard_deactivate_and_reactivate_staff(qtbot, monkeypatch):
+    from src.ui.dashboard import DashboardWidget
+    from PySide6.QtWidgets import QMessageBox
+
+    info_messages = []
+    monkeypatch.setattr(QMessageBox, 'information', lambda parent, title, msg: info_messages.append(msg))
+    monkeypatch.setattr(QMessageBox, 'warning', lambda parent, title, msg: None)
+    monkeypatch.setattr(QMessageBox, 'question', lambda *args, **kwargs: QMessageBox.Yes)
+
+    dash = DashboardWidget()
+    qtbot.addWidget(dash)
+
+    emp_id = "507f1f77bcf86cd799439011"
+    dash.employees = {
+        emp_id: {
+            "_id": emp_id,
+            "employee_no": "EMP01",
+            "full_name": "Test Active",
+            "status": "active"
+        }
+    }
+    dash.add_row(dash.emp_table, ["Main", "EMP01", "Test Active", "Dev", "active", "Enrolled"], emp_id)
+    dash.emp_table.setCurrentCell(0, 0)
+
+    updated = {}
+    class FakeEmployees:
+        def update_one(self, query, update):
+            updated.update(update.get('$set', {}))
+            return None
+
+    class FakeClientDb:
+        employees = FakeEmployees()
+
+    monkeypatch.setattr('src.ui.dashboard.ClientDatabase.get_db', lambda: FakeClientDb())
+
+    # 1. Test deactivate
+    dash.deactivate()
+    qtbot.waitUntil(lambda: updated.get('status') == 'inactive', timeout=3000)
+    assert updated['status'] == 'inactive'
+
+    # 2. Test reactivate
+    dash.employees[emp_id]['status'] = 'inactive'
+    dash.reactivate()
+    qtbot.waitUntil(lambda: updated.get('status') == 'active', timeout=3000)
+    assert updated['status'] == 'active'
+
+    # 3. Reactivating already active staff gives friendly message
+    dash.employees[emp_id]['status'] = 'active'
+    info_messages.clear()
+    dash.reactivate()
+    assert len(info_messages) == 1
+    assert 'already active' in info_messages[0]

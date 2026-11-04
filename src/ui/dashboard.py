@@ -97,6 +97,25 @@ class DeactivateWorker(QThread):
             self.deactivate_failed.emit(str(exc))
 
 
+class ReactivateWorker(QThread):
+    reactivate_success = Signal()
+    reactivate_failed = Signal(str)
+
+    def __init__(self, employee_id):
+        super().__init__()
+        self.employee_id = employee_id
+
+    def run(self):
+        try:
+            ClientDatabase.get_db().employees.update_one(
+                {'_id': self.employee_id},
+                {'$set': {'status': 'active'}}
+            )
+            self.reactivate_success.emit()
+        except Exception as exc:
+            self.reactivate_failed.emit(str(exc))
+
+
 class DeleteAttendanceWorker(QThread):
     finished_success = Signal(int)
     finished_error = Signal(str)
@@ -529,6 +548,10 @@ class DashboardWidget(QWidget):
         deactivate_btn = QPushButton('Deactivate staff')
         deactivate_btn.clicked.connect(self.deactivate)
         emp_buttons.addWidget(deactivate_btn)
+
+        reactivate_btn = QPushButton('Reactivate staff')
+        reactivate_btn.clicked.connect(self.reactivate)
+        emp_buttons.addWidget(reactivate_btn)
 
         emp_buttons.addStretch()
         employee_layout.addLayout(emp_buttons)
@@ -989,6 +1012,34 @@ class DashboardWidget(QWidget):
     def on_deactivate_failed(self, error_msg):
         self.summary.setText('Could not deactivate employee.')
         QMessageBox.warning(self, 'Could not deactivate', error_msg)
+
+    def reactivate(self):
+        employee = self.selected_employee()
+        if not employee:
+            return
+        if employee.get('status') == 'active':
+            QMessageBox.information(self, 'Reactivate staff', f"{employee.get('full_name', 'Employee')} is already active.")
+            return
+
+        name = employee.get('full_name', 'this employee')
+        emp_no = employee.get('employee_no', '')
+        prompt = f"Reactivate staff member {name} ({emp_no})?\n\nThis will restore their ability to record attendance."
+        if QMessageBox.question(self, 'Reactivate staff', prompt, QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes) != QMessageBox.Yes:
+            return
+
+        self.summary.setText(f'Reactivating {name}...')
+        self.react_worker = ReactivateWorker(employee['_id'])
+        self.react_worker.reactivate_success.connect(self.on_reactivate_success)
+        self.react_worker.reactivate_failed.connect(self.on_reactivate_failed)
+        self.react_worker.start()
+
+    def on_reactivate_success(self):
+        self.summary.setText('Employee reactivated successfully.')
+        self.refresh()
+
+    def on_reactivate_failed(self, error_msg):
+        self.summary.setText('Could not reactivate employee.')
+        QMessageBox.warning(self, 'Could not reactivate', error_msg)
 
     def export_reports(self):
         default_name = f"Attendance_Report_{self.from_date.date().toString('yyyyMMdd')}_{self.to_date.date().toString('yyyyMMdd')}.xlsx"
