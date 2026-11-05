@@ -100,10 +100,11 @@ async def security_and_rate_limit(request: Request, call_next):
     return response
 
 
+@app.get("/")
 @app.get("/healthz")
 @app.get("/health")
 def health_check():
-    return {"status": "ok", "time": datetime.utcnow().isoformat()}
+    return {"status": "ok", "service": "randaframes-attendance", "time": datetime.utcnow().isoformat()}
 
 
 @app.exception_handler(PyMongoError)
